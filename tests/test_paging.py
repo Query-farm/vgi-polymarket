@@ -1,9 +1,9 @@
 """Paging mechanics — the failure mode here returns HTTP 200 forever.
 
 Gamma's keyset cursor comes back as `next_cursor` and must be sent as
-`after_cursor`. Sending it as `cursor` (the obvious guess, and the name the
-sibling Kalshi worker uses) is accepted with HTTP 200 and silently ignored, so
-the walk re-serves page one until MAX_PAGES. Nothing in the response
+`after_cursor`. Sending it as `cursor` — the obvious guess, since that is the
+field it came from — is accepted with HTTP 200 and silently ignored, so the walk
+re-serves page one until MAX_PAGES. Nothing in the response
 distinguishes that from real progress, so only an explicit test notices.
 """
 

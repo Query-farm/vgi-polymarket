@@ -117,10 +117,9 @@ def to_column_decimal(value: Any, kind: pa.Decimal128Type, *, exact: bool) -> De
 
     The two policies differ, and the difference is the point:
 
-    ``exact=True`` (**prices**) keeps the guarantee the sibling Kalshi worker
-    makes: a value that will not fit the column's scale becomes NULL rather than
-    being rounded, because rounding money is exactly the silent loss this module
-    exists to prevent. That is safe here because it is also *unreachable* in
+    ``exact=True`` (**prices**) refuses to round: a value that will not fit the
+    column's scale becomes NULL instead, because rounding money is exactly the
+    silent loss this module exists to prevent. That is safe here because it is also *unreachable* in
     normal operation — Polymarket's finest tick is 0.001 and a midpoint splits
     it to 0.0005, so nothing legitimate needs more than the six decimal places
     the column declares. A price that does not fit is a misread, and NULL is the

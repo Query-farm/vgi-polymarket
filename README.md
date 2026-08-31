@@ -48,9 +48,10 @@ published versions from `[project.dependencies]`.
 
 ## The identifiers
 
-Almost every mistake against this catalog is the same mistake, so it is worth
-stating before anything else. Two of the three keys below are both called
-`market` in Polymarket's own URLs, and they are not interchangeable:
+Polymarket identifies three different things, and its own URLs call two of them
+`market`. They are not interchangeable, and passing one where another belongs
+usually returns an empty result rather than an error — so it is worth settling
+before anything else:
 
 | Identifier | Looks like | Identifies | Functions that take it |
 |---|---|---|---|
@@ -207,19 +208,19 @@ Data API keys on `condition_id` — except `positions`, which keys on a wallet.
 `Warning: 299 - "use /markets/keyset"`. It also offset-pages, which skips and
 repeats rows when the catalog shifts under a walk.
 
-**The cursor parameter is `after_cursor`, and the response field is
-`next_cursor`.** Passing it back as `cursor` — the obvious guess, and the name
-the sibling Kalshi worker uses — is accepted with HTTP 200 and silently ignored,
-so the walk re-serves page one forever. Nothing in the response distinguishes
-that from real progress; it was caught here only by checking that ids advanced
-across pages, which is now `tests/test_paging.py`.
+**The cursor parameter is `after_cursor`, and the response field it comes from
+is `next_cursor`.** Passing it back under its own name is accepted with HTTP 200
+and silently ignored, so the walk re-serves page one indefinitely. Nothing in the
+response distinguishes that from real progress, which is why
+`tests/test_paging.py` asserts that ids actually advance across pages.
 
 **Filter pushdown is a promise, not a hint.** `markets()` and `events()` declare
 `filter_pushdown`, which makes the DuckDB extension drop its own filter above the
 scan — it now believes the worker applies the predicate. The filters are only
-*delivered*, though, when `auto_apply_filters` is declared alongside it. With one
-and not the other, every predicate was silently discarded and
-`WHERE slug = 'NO-SUCH-SLUG'` returned rows. The three flags go together:
+*delivered*, though, when `auto_apply_filters` is declared alongside it. Declaring
+one without the other discards every predicate silently: the engine has stopped
+re-checking, and the worker never receives anything to check. The three flags go
+together:
 
 | Flag | Why it is required |
 |---|---|
@@ -228,9 +229,10 @@ and not the other, every predicate was silently discarded and
 | `projection_pushdown` | A pushed filter's column index is relative to the projection |
 
 `tests/test_catalog.py::TestPushdownFlags` fails the build if any function
-declares one without the others, and `tests/test_end_to_end.py` — which drives a
-real `ATTACH` — is the only place the bug was visible at all. Every unit test
-passed the whole time it was broken.
+declares one without the others. `tests/test_end_to_end.py` — which drives a real
+`ATTACH` — is the only kind of test that can see a fault of this shape at all: a
+worker that ignores its filters still passes every test written against its API
+layer.
 
 Two consequences worth knowing. A predicate on a column Gamma *can* filter
 (`slug`, `condition_id`, `market_id`) is translated into a query parameter and
@@ -254,8 +256,9 @@ is a deliberate trade — `WHERE volume_24hr > 999999999999` now fails loudly
 where it used to return five unfiltered rows instantly.
 
 **Page sizes clamp silently.** Ask `/markets/keyset` for 500 and you get 100;
-ask `/series` for 100 and you get 50. Kalshi answers an oversized page with a
-hard 400, which is the easier failure to notice. Measured caps:
+ask `/series` for 100 and you get 50. There is no error and no indication in the
+response that more was requested, so a caller that assumes it got what it asked
+for will quietly under-read. Measured caps:
 
 | Endpoint | Max page |
 |---|---|
@@ -296,9 +299,6 @@ differently, and the difference is deliberate:
   the exact-or-NULL rule is applied only where the precision is real. A value
   too *large* for the column is still NULL, since that is genuine overflow
   rather than noise.
-
-That second case was a bug before it was a policy: the strict rule voided
-`volume_24hr` on roughly every row until the two families were separated.
 
 ### The `outcomes` column
 
@@ -443,11 +443,11 @@ already made 300 successful calls. A 4xx is not retried, and a 429 is never
 folded into the freshness hint, since it carries the CDN's error policy rather
 than the resource's.
 
-**Transport.** Responses are gzipped. Unlike the sibling Kalshi worker, `brotli`
-is **not** a dependency here: Polymarket's CDN answers `Accept-Encoding: br,
-gzip, zstd` with gzip on all three hosts, so the codec would be installed and
-never negotiated. `tests/test_packaging.py::TestTransport` pins what is actually
-offered.
+**Transport.** Responses are gzipped. `brotli` is deliberately **not** a
+dependency: Polymarket's CDN answers `Accept-Encoding: br, gzip, zstd` with gzip
+on all three hosts, so the codec would be installed and never negotiated.
+`tests/test_packaging.py::TestTransport` pins what is actually offered, so the
+reasoning cannot go stale unnoticed.
 
 **The two catalog tables fetch their pages concurrently.** This is the one
 thing offset paging is good for: page N+1's address does not depend on page N's
@@ -541,10 +541,11 @@ The `vgi.agent_test_tasks` suite is graded by `check_sql` invariants rather than
 by `reference_sql`. That is forced by the data: vgi-lint grades a reference task
 by comparing the analyst's answer result-set to the reference's for exact
 equality, and every interesting question here is about prices, volumes and books
-that move between the two executions — the suite scored 8% until it moved to
-invariants. The invariants assert real properties (prices are probabilities, an
-ask is never below a bid, a book side is labelled `bid` or `ask`), so they still
-test something. `tests/test_catalog.py::TestAgentTasks` keeps it that way.
+that move between the two executions — so a reference comparison fails even for a
+correct answer. The invariants assert real properties instead (prices are
+probabilities, an ask is never below a bid, a book side is labelled `bid` or
+`ask`), so they still test something. `tests/test_catalog.py::TestAgentTasks`
+keeps it that way.
 
 ## License
 

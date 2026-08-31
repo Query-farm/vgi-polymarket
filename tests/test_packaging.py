@@ -68,10 +68,9 @@ class TestTransport:
 
     httpx builds `Accept-Encoding` from the codecs it can find at import time.
     Polymarket's CDN answers with gzip on all three hosts even when brotli and
-    zstd are offered, which is why `brotli` is deliberately NOT a dependency
-    here — unlike the sibling Kalshi worker, where it saves 35% on a 15 MB
-    catalog. A behavioural check is the only thing that would notice if that
-    reasoning went stale.
+    zstd are offered, which is why `brotli` is deliberately NOT a dependency:
+    the codec would be installed and never negotiated. A behavioural check is
+    the only thing that would notice if that reasoning went stale.
     """
 
     @staticmethod

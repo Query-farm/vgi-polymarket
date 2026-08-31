@@ -9,8 +9,7 @@ The tables are declared in :mod:`vgi_polymarket.worker` as
 ``Table(name="tags", function=AllTagsFunction)``; VGI's
 ``ReadOnlyCatalogInterface.table_scan_function_get`` auto-wires the scan, so no
 scan code is needed here. The backing functions take an ``all_`` prefix because
-a function and the table it backs cannot share one name in a schema — the same
-convention the sibling Kalshi worker uses for ``all_series``.
+a function and the table it backs cannot share one name in a schema.
 """
 
 from __future__ import annotations

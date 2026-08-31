@@ -130,11 +130,17 @@ def _flag(value: str) -> str | None:
 
 
 #: Gamma **silently ignores** a query parameter it does not recognise: a filter
-#: that does not exist returns the unfiltered first page with HTTP 200. That
-#: makes an incorrect pushdown a bandwidth cost rather than a wrong answer
-#: (DuckDB re-applies every predicate to what comes back), but it also means a
-#: typo can never be caught at runtime — so only parameters verified against the
+#: that does not exist returns the unfiltered first page with HTTP 200. A typo
+#: therefore cannot be caught at runtime, so only parameters verified against the
 #: live API and the published OpenAPI document are ever sent.
+#:
+#: Translating a predicate here is an optimisation, not the thing that makes it
+#: correct. Every predicate is applied to the rows regardless, by the framework's
+#: filtering collector — see `Meta.auto_apply_filters`. What this buys is the
+#: chance to have Gamma narrow the result *before* it is fetched, which is the
+#: difference between one request and a walk of a 120,000-row catalog. Declining
+#: to translate one costs bandwidth; translating one *wrongly* would drop rows
+#: the API never returned, and nothing downstream could recover them.
 #:
 #: These are the market columns whose equality predicates map exactly onto a
 #: Gamma filter of the same meaning. `event_id` is deliberately absent:
@@ -156,10 +162,12 @@ _EVENT_PUSHDOWN = {
 def _pushed(params: ProcessParams[Any], mapping: dict[str, str], already: set[str]) -> list[tuple[str, Any]]:
     """Turn a pushed-down WHERE into Gamma query parameters, conservatively.
 
-    Both directions are pure optimisation: DuckDB re-applies the predicate to
-    whatever comes back, so a filter declined costs bandwidth, never
-    correctness. Only exact correspondences are used, and an explicit named
-    argument always wins — the caller said what they wanted.
+    Declining to translate a predicate costs bandwidth, never correctness: the
+    filters are applied to the rows either way, by the framework's filtering
+    collector. Translating one *wrongly* is the dangerous direction, because a
+    row Gamma never returned cannot be recovered downstream — the engine has
+    already dropped its own filter above this scan. So only exact
+    correspondences are used, and an explicit named argument always wins.
     """
     filters = params.current_pushdown_filters
     if filters is None:
@@ -796,8 +804,8 @@ class EventMarketsFunction(RowTransformFunction[EventIdArgs]):
 
     Markets read out of an event payload have no nested ``events`` key, so the
     event's id and slug are stamped onto each row before reshaping — the same
-    trick the sibling Kalshi worker uses to put a series ticker on a market that
-    does not carry one.
+    same shape of fix as any other denormalised parent: the child does not
+    repeat it, so the caller supplies it.
     """
 
     FIXED_SCHEMA: ClassVar[pa.Schema] = MARKET_SCHEMA

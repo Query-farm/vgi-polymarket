@@ -66,7 +66,7 @@ class TestPageLimits:
         assert len(rows) <= api.SERIES_PAGE_LIMIT
 
     def test_an_oversized_limit_is_not_an_error(self, client) -> None:
-        """Kalshi answers this with a 400; Polymarket just gives you fewer rows."""
+        """No error — just a shorter page than the caller asked for."""
         rows, _ = api.keyset_page(api.MARKETS_PATH, "markets", [], client=client, page_limit=100_000)
         assert rows
 

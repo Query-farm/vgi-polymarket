@@ -68,10 +68,10 @@ EVENTS_PATH = "/events/keyset"
 #: book or price. None of them accepts an order, a signature, or a wallet.
 READ_ONLY_POST_PATHS = frozenset({"/books", "/prices", "/midpoints"})
 
-#: Gamma silently **clamps** an oversized `limit` rather than rejecting it, which
-#: is the opposite of Kalshi's hard 400 and much easier to miss: ask for 500 and
-#: you get 100 with no indication that you asked for more. Probed against the
-#: live API — see ``tests/test_live.py::TestPageLimits``.
+#: Gamma silently **clamps** an oversized `limit` rather than rejecting it: ask
+#: for 500 and you get 100, with no error and nothing in the response saying more
+#: was requested. A caller that assumes it got what it asked for under-reads.
+#: Probed against the live API — see ``tests/test_live.py::TestPageLimits``.
 GAMMA_PAGE_LIMIT = 100
 
 #: `/series` clamps lower still, at 50.
@@ -385,9 +385,10 @@ def keyset_page(
 
     The cursor parameter is ``after_cursor``. This is worth stating because the
     response field it comes from is called ``next_cursor``, and passing it back
-    as ``cursor`` — the obvious guess, and the name Kalshi uses — is accepted
-    with HTTP 200 and **silently ignored**, so the walk re-serves page one
-    forever. Nothing in the response distinguishes that from real progress.
+    as ``cursor`` — the obvious guess, since that is the field it came from —
+    is accepted with HTTP 200 and **silently ignored**, so the walk re-serves
+    page one forever. Nothing in the response distinguishes that from real
+    progress.
 
     A ``None`` cursor means this was the final page.
     """

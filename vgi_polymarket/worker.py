@@ -622,8 +622,9 @@ _CATALOG_TAGS = {
         "token. A token pays $1 if its outcome happens and $0 otherwise, so its price is the "
         "market's implied probability of that outcome.\n\n"
         "### The two identifiers — read this first\n\n"
-        "Nearly every mistake against this catalog is the same mistake, and it is usually "
-        "silent. There are two keys, and Polymarket's own URLs call both of them `market`:\n\n"
+        "Polymarket has two keys and its own URLs call both of them `market`. They are not "
+        "interchangeable, and passing one where the other belongs usually returns an empty "
+        "result rather than an error:\n\n"
         "| Key | Looks like | Names | Used by |\n"
         "|---|---|---|---|\n"
         "| `condition_id` | `0x` + 64 hex | a whole market | the trade tape, the holder list, "
@@ -842,8 +843,8 @@ _POLYMARKET_CATALOG = Catalog(
 class PolymarketCatalog(ReadOnlyCatalogInterface):
     """Advertises the worker's versions and its single read-only catalog.
 
-    There is no secret type and no ``auth`` attach option, unlike the sibling
-    Kalshi worker. That is not an omission: Polymarket's entire market-data
+    There is no secret type and no ``auth`` attach option. That is not an
+    omission: Polymarket's entire market-data
     surface is public, and the only thing authentication buys is the ability to
     place orders, which requires an EIP-712 wallet signature and is not
     something a read-only worker should be able to do. Offering an unused
