@@ -35,6 +35,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from urllib.parse import quote as urlquote
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -513,10 +514,19 @@ def event(
     ``markets()`` uses — Gamma's market endpoint has no event filter, so the
     inlined copy is the only route to them.
 
+    The id is percent-encoded into the path rather than interpolated. It reaches
+    this function from SQL, so it is caller-controlled, and an unencoded ``..``
+    segment does not merely produce a bad request — it silently retargets the
+    call: ``event('16183/../../markets')`` resolves to ``GET /markets`` and
+    returns a different endpoint's rows reshaped as an event. Every other
+    caller-supplied value in this module travels as a query parameter, which
+    httpx encodes; this is the one that forms part of the path.
+
     Raises:
         NotFound: No event has that id.
     """
-    payload = _get(gamma_base_url(), f"/events/{event_id}", client=client, hint=hint)
+    path = f"/events/{urlquote(str(event_id), safe='')}"
+    payload = _get(gamma_base_url(), path, client=client, hint=hint)
     return payload if isinstance(payload, dict) else {}
 
 

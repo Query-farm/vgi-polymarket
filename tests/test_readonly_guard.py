@@ -16,6 +16,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 PACKAGE = Path(__file__).resolve().parent.parent / "vgi_polymarket"
 
 #: httpx verbs that would mutate state, and are never legitimate here.
@@ -120,6 +122,54 @@ class TestPostIsConfined:
         with httpx.Client(transport=httpx.MockTransport(handler)) as client:
             with pytest.raises(ValueError):
                 api._post_read("/order", [{"x": 1}], client=client)
+
+
+class TestPathsCannotBeRetargeted:
+    """A caller-supplied id must not be able to choose the endpoint.
+
+    ``event_id`` arrives from SQL and is the only caller value this worker puts
+    in a URL *path* — everything else travels as a query parameter, which httpx
+    encodes. Interpolated raw, ``event('16183/../../markets')`` resolved to
+    ``GET /markets`` and returned a different endpoint's rows reshaped as an
+    event: not a bad request, a wrong answer. The read-only guard is about which
+    endpoints are reachable, and this is a way to reach one that was never
+    declared.
+    """
+
+    @staticmethod
+    def _wire_path(event_id: str) -> str:
+        import httpx
+
+        from vgi_polymarket import polymarket_api as api
+
+        seen: dict[str, str] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["raw"] = request.url.raw_path.decode()
+            return httpx.Response(200, json={})
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            api.event(event_id, client=client)
+        return seen["raw"]
+
+    def test_a_normal_id_is_untouched(self) -> None:
+        assert self._wire_path("16183") == "/events/16183"
+
+    @pytest.mark.parametrize(
+        "hostile",
+        ["16183/../../markets", "../../markets", "a/b", "16183?x=1", "16183#frag", "16183 space"],
+    )
+    def test_an_id_stays_one_path_segment(self, hostile: str) -> None:
+        path = self._wire_path(hostile)
+        assert path.startswith("/events/"), path
+        # Nothing after the prefix may re-open the path or the query string.
+        tail = path[len("/events/") :]
+        assert "/" not in tail, f"{hostile!r} escaped its segment: {path}"
+        assert "?" not in tail and "#" not in tail, f"{hostile!r} escaped into the query: {path}"
+
+    def test_traversal_cannot_reach_another_endpoint(self) -> None:
+        """The concrete failure this closes."""
+        assert self._wire_path("16183/../../markets") != "/markets"
 
 
 class TestNoCredentialedSurface:

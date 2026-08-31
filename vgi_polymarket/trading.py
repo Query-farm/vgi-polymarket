@@ -265,10 +265,17 @@ class QuoteFunction(RowTransformFunction[TokenArgs]):
             ),
             md=(
                 "One row per token, assembled from the CLOB's batched quote endpoints.\n\n"
-                "### Midpoint is the number you usually want\n\n"
+                "### Midpoint is the number you usually want — if the spread is tight\n\n"
                 "`midpoint` sits halfway between best bid and best ask and is what Polymarket "
                 "displays as the price. Because a share pays $1 if its outcome happens, it reads "
-                "directly as an implied probability: 0.62 is 62%.\n\n"
+                "as an implied probability: 0.62 is 62%.\n\n"
+                "**Check `spread` before believing it.** A midpoint is only a forecast to the "
+                "extent that someone is willing to trade near it. On a thin market the two sides "
+                "can be almost unrelated — a real book quoted 0.020 bid against 0.990 ask, whose "
+                "midpoint of 0.505 is not a coin flip but the average of two numbers nobody "
+                "would trade at. That is why this function returns `spread` alongside "
+                "`midpoint` rather than only the price: a wide spread means the number above it "
+                "is noise, and `orderbook()` will show how little is resting behind it.\n\n"
                 "### Naming\n\n"
                 "The CLOB reports quotes as `BUY` and `SELL`, and the mapping is the opposite "
                 "of the obvious one: `BUY` is the best **bid** and `SELL` is the best **ask**, "
@@ -435,8 +442,11 @@ class PriceHistoryFunction(RowTransformFunction[PriceHistoryArgs]):
                 "only settled points and is cached for a day; one running up to now carries a "
                 "still-moving last point and takes the origin's 90-second TTL.\n\n"
                 "### Prices are probabilities\n\n"
-                "Each `price` is USDC per share between 0 and 1, so the curve reads directly as "
-                "the market's implied probability over time."
+                "Each `price` is USDC per share between 0 and 1, so the curve reads as the "
+                "market's implied probability over time. These are traded prices rather than a "
+                "normalised display figure, so a flat stretch means nothing traded — not that "
+                "the market held an opinion steady. Pair it with `quote()` if you need to know "
+                "whether there is a market behind the curve right now."
             ),
             example_queries=examples(
                 (
@@ -929,9 +939,24 @@ class ActivityArgs:
             "activity_type",
             doc="Keep only entries of this kind",
             default="",
-            # Observed across a sample of active wallets, not guessed: TRADE
-            # dominates, and the rest are rare but real.
-            choices=["", "TRADE", "REDEEM", "MERGE", "SPLIT", "YIELD", "MAKER_REBATE", "TAKER_REBATE"],
+            # Every value observed across ~19,600 entries from 60 wallets
+            # sampled over three tags — not guessed, and not a small sample:
+            # an earlier 12-wallet pass missed REWARD, CONVERSION and
+            # REFERRAL_REWARD entirely, which is why the live suite asserts
+            # this list against what the API actually emits.
+            choices=[
+                "",
+                "TRADE",
+                "REDEEM",
+                "YIELD",
+                "MAKER_REBATE",
+                "MERGE",
+                "TAKER_REBATE",
+                "REWARD",
+                "SPLIT",
+                "CONVERSION",
+                "REFERRAL_REWARD",
+            ],
         ),
     ] = ""
     max_rows: Annotated[

@@ -480,6 +480,56 @@ class TestAgentTasks:
         assert objects <= called, f"no agent task exercises: {sorted(objects - called)}"
 
 
+class TestProbabilityClaimIsQualified:
+    """A price is a probability only where the book is tight.
+
+    Polymarket normalises a market's displayed outcome prices to sum to 1, so
+    they always look like a coherent forecast. A live rain market quoted 0.020
+    bid against 0.990 ask — a midpoint of 0.505 on a $61 book with one order a
+    side. Documentation that calls that "a 50.5% chance" produces confidently
+    wrong analysis, and an agent reading the catalog is exactly the consumer
+    that would.
+    """
+
+    @staticmethod
+    def _docs() -> dict[str, str]:
+        schema = _POLYMARKET_CATALOG.schemas[0]
+        out = {
+            "catalog.doc_md": _POLYMARKET_CATALOG.tags["vgi.doc_md"],
+            "catalog.doc_llm": _POLYMARKET_CATALOG.tags["vgi.doc_llm"],
+        }
+        for function in schema.functions:
+            for key in ("vgi.doc_llm", "vgi.doc_md"):
+                out[f"{function.Meta.name}.{key}"] = getattr(function.Meta, "tags", {}).get(key, "")
+        return out
+
+    def test_no_doc_calls_a_price_a_probability_unconditionally(self) -> None:
+        """`reads directly as` was the exact phrasing that made the claim absolute."""
+        offenders = [
+            name
+            for name, text in self._docs().items()
+            if re.search(r"directly as (a |an )?\d*%? ?implied probabilit", text)
+            or "reads directly as the market's implied probability" in text
+        ]
+        assert offenders == [], (
+            f"these promise a price is a probability with no liquidity caveat: {offenders}"
+        )
+
+    def test_the_places_that_quote_a_price_mention_the_spread(self) -> None:
+        """Wherever the docs teach the probability reading, they must teach the check."""
+        for name in ("markets.vgi.doc_md", "quote.vgi.doc_md", "catalog.doc_md"):
+            text = self._docs()[name]
+            assert "implied probabilit" in text, f"{name} no longer explains the reading"
+            assert "spread" in text.lower(), f"{name} teaches the reading without the caveat"
+
+    def test_quote_still_returns_the_spread_that_check_depends_on(self) -> None:
+        """The advice is only actionable because the column exists."""
+        from vgi_polymarket.schemas import QUOTE_SCHEMA
+
+        assert "spread" in QUOTE_SCHEMA.names
+        assert "best_bid" in QUOTE_SCHEMA.names and "best_ask" in QUOTE_SCHEMA.names
+
+
 class TestExampleChannels:
     """The native `Meta.examples` and the `vgi.example_queries` tag must agree."""
 

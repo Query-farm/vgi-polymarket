@@ -514,8 +514,9 @@ ACTIVITY_SCHEMA = pa.schema(
         field(
             "activity_type",
             pa.string(),
-            "What happened: TRADE, REDEEM, MERGE, SPLIT, YIELD, MAKER_REBATE or TAKER_REBATE. "
-            "Only TRADE rows carry a price and a side; the rest leave them NULL.",
+            "What happened: TRADE, REDEEM, YIELD, MERGE, SPLIT, CONVERSION, or one of the "
+            "MAKER_REBATE / TAKER_REBATE / REWARD / REFERRAL_REWARD incentive payments. Only "
+            "TRADE rows carry a price and a side; the rest leave them NULL.",
         ),
         field("condition_id", pa.string(), "Market involved; NULL for activity not tied to one."),
         field("token_id", pa.string(), "Outcome token involved; NULL for activity not tied to one."),
