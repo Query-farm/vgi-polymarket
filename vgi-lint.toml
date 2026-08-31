@@ -1,0 +1,30 @@
+# vgi-lint configuration for the Polymarket worker.
+#
+#   vgi-lint lint --audit-waivers
+#
+# re-runs the rules these waivers silence and fails if either has stopped buying
+# anything — a waiver that suppresses nothing is a standing claim nobody
+# revisits, and it hides the moment the rule starts applying.
+
+location = "uv run --project . polymarket_worker.py"
+select = ["ALL"]
+fail_on = "error"
+
+ignore = [
+  { code = "VGI311", kind = "tooling-bug", reason = """\
+Both parameterless scans here ARE exposed as tables: all_tags backs `tags` and \
+all_series backs `series`. The rule looks for a table whose name matches the \
+function's, so it cannot see the link. The names differ deliberately — a \
+function and a table cannot share one name in a schema, so the scan takes the \
+`all_` prefix and the table keeps the name consumers actually type.\
+""" },
+]
+
+[per-object]
+# `tag_id` is this table's own primary key, not a reference to another table.
+# The rule matches on the `<table>_id` name shape, which here collides with the
+# singular of the table's own name; a foreign key from tags.tag_id to tags.tag_id
+# would assert a self-reference that means nothing.
+"polymarket.main.tags" = { ignore = [
+  { code = "VGI808", kind = "domain-exemption", reason = "tag_id is this table's own primary key, not a reference to another table" },
+] }

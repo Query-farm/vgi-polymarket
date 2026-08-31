@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Environments
+.venv/
+venv/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# vgi-lint state is per-machine: baselines, plus the review/simulation caches
+# that hold the results of previous runs on this checkout.
+.vgi-lint-baseline*.json
+.vgi-review-cache.json
+.vgi-sim-cache.json
