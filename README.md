@@ -32,19 +32,40 @@ they hold, as ordinary tables and table functions.
 
 ## Run
 
+The engine is [Haybarn](https://github.com/Query-farm-haybarn/haybarn), Query
+Farm's DuckDB distribution, which ships the `vgi` extension signed and ready:
+
 ```bash
-uv run polymarket_worker.py         # stdio
-uv run serve.py --port 8000         # HTTP
+uvx haybarn-cli
 ```
+
+The worker speaks two transports, and both are exercised by the test suite.
+
+**stdio** — the engine launches the worker itself, one process per connection:
 
 ```sql
 ATTACH 'polymarket' (TYPE vgi, LOCATION 'uv run polymarket_worker.py');
 ```
 
-Both scripts carry PEP-723 headers that resolve `vgi-python` and `vgi-rpc` from
-sibling checkouts (`../vgi-python`, `../vgi-rpc`), matching this project's
-`[tool.uv.sources]`. Installing the package instead (`pip install .`) uses the
-published versions from `[project.dependencies]`.
+**HTTP** — run the worker as a service and point the engine at it:
+
+```bash
+uv run serve.py --port 8000
+```
+
+```sql
+ATTACH 'polymarket' (TYPE vgi, LOCATION 'http://127.0.0.1:8000');
+```
+
+Request and response bodies are Arrow IPC, compressed with zstd when both ends
+support it and gzip otherwise. Set `VGI_HTTP_DISABLE_ZSTD=1` on the server to
+drop zstd from both the advertised and accepted sets; the client renegotiates to
+gzip on its own.
+
+Both entry-point scripts carry PEP-723 headers that resolve `vgi-python` and
+`vgi-rpc` from sibling checkouts (`../vgi-python`, `../vgi-rpc`), matching this
+project's `[tool.uv.sources]`. Installing the package instead (`pip install .`)
+uses the published versions from `[project.dependencies]`.
 
 ## The identifiers
 
@@ -524,13 +545,13 @@ identifier to the right function.
 parameter sent, and that a scan which stops advancing is caught. That failure
 mode returns HTTP 200 forever, so nothing but an explicit test notices it.
 
-`tests/test_end_to_end.py` drives a real `ATTACH` and is the only place a
+`tests/test_end_to_end.py` drives a real `ATTACH` through
+[Haybarn](https://github.com/Query-farm-haybarn/haybarn) and is the only place a
 pushdown fault is visible: every other test calls the API layer or the schema
 helpers directly, so all of them passed throughout the period when `markets()`
-was ignoring every `WHERE`. It needs `duckdb` and `pytz` (DuckDB requires the
-latter to materialize `TIMESTAMP WITH TIME ZONE`, which most columns here are),
-and `allow_unsigned_extensions`, because the vgi extension ships unsigned from
-the community repository. It is marked `live`, so `pytest` alone does not run it.
+was ignoring every `WHERE`. It covers both transports — stdio and HTTP, the
+latter by starting `serve.py` on a free port — and needs `uvx` on PATH. It is
+marked `live`, so `pytest` alone does not run it.
 
 `tests/test_packaging.py` checks the two entry-point scripts' PEP-723 headers
 still cover every runtime dependency — they resolve independently of

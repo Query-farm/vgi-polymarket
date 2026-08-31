@@ -47,9 +47,7 @@ serve = ["vgi-python[http,oauth]>=0.31.0", "vgi-rpc[sentry]>=0.44.1"]
 
 [dependency-groups]
 dev = [
-    "duckdb>=1.5.5",
     "pytest>=8",
-    "pytz>=2026.3.post1",
     "ruff>=0.15",
 ]
 
