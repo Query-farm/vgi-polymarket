@@ -328,6 +328,6 @@ class TestHttpTransport:
             "SELECT bool_and(t.price BETWEEN 0 AND 1) IS NOT FALSE FROM ("
             "SELECT condition_id FROM polymarket.main.markets(closed => 'false', "
             "order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-            "LATERAL polymarket.main.trades(m.condition_id) t;",
+            "LATERAL polymarket.main.trades(m.condition_id, 100, '') t;",
         )
         assert _is_true(out)

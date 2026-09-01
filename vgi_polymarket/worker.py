@@ -75,7 +75,7 @@ _EXAMPLE_QUERIES = examples(
         "SELECT h.ts, h.price FROM (SELECT o.token_id FROM polymarket.main.markets("
         "closed => 'false', order_by => 'volume24hr', ascending => 'false') m, "
         "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, "
-        "LATERAL polymarket.main.price_history(t.token_id) h "
+        "LATERAL polymarket.main.price_history(t.token_id, '1w', 60) h "
         "ORDER BY h.ts",
     ),
     (
@@ -83,22 +83,22 @@ _EXAMPLE_QUERIES = examples(
         "SELECT t.ts, t.side, t.outcome, t.price, t.size, t.trader_name FROM ("
         "SELECT condition_id FROM polymarket.main.markets("
         "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-        "LATERAL polymarket.main.trades(m.condition_id) t ORDER BY t.ts DESC",
+        "LATERAL polymarket.main.trades(m.condition_id, 100, '') t ORDER BY t.ts DESC",
     ),
     (
         "Who holds the biggest positions in the busiest open market",
         "SELECT h.outcome_index, h.holder_name, h.amount FROM ("
         "SELECT condition_id FROM polymarket.main.markets("
         "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-        "LATERAL polymarket.main.holders(m.condition_id) h ORDER BY h.amount DESC",
+        "LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC",
     ),
     (
         "Follow the biggest holder in a busy market to everything else they hold",
         "SELECT p.title, p.outcome, p.size, p.cash_pnl FROM (SELECT h.proxy_wallet FROM ("
         "SELECT condition_id FROM polymarket.main.markets(closed => 'false', "
         "order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-        "LATERAL polymarket.main.holders(m.condition_id) h ORDER BY h.amount DESC LIMIT 1) w, "
-        "LATERAL polymarket.main.positions(w.proxy_wallet) p ORDER BY p.current_value DESC",
+        "LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC LIMIT 1) w, "
+        "LATERAL polymarket.main.positions(w.proxy_wallet, 100) p ORDER BY p.current_value DESC",
     ),
     (
         "The biggest open events, and the markets under one of them",
@@ -117,8 +117,16 @@ _EXAMPLE_QUERIES = examples(
         "SELECT a.ts, a.activity_type, a.side, a.price, a.size FROM (SELECT h.proxy_wallet FROM ("
         "SELECT condition_id FROM polymarket.main.markets(closed => 'false', "
         "order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-        "LATERAL polymarket.main.holders(m.condition_id) h ORDER BY h.amount DESC LIMIT 1) w, "
-        "LATERAL polymarket.main.activity(w.proxy_wallet) a ORDER BY a.ts DESC",
+        "LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC LIMIT 1) w, "
+        "LATERAL polymarket.main.activity(w.proxy_wallet, 500, '') a ORDER BY a.ts DESC",
+    ),
+    (
+        "What 5,000 shares would really cost, against what the touch advertises",
+        "SELECT m.question, o.outcome, q.midpoint, f.avg_price, f.slippage, f.fully_filled "
+        "FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', "
+        "ascending => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
+        "LATERAL polymarket.main.quote(o.token_id) q, "
+        "LATERAL polymarket.main.fill_price(o.token_id, 'buy', 5000) f LIMIT 20",
     ),
     (
         "Active recurring series by recent volume",
@@ -325,7 +333,7 @@ _AGENT_TEST_TASKS = json.dumps(
                 "SELECT o.token_id FROM polymarket.main.markets(closed => 'false', "
                 "order_by => 'volume24hr', ascending => 'false') m, "
                 "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, "
-                "LATERAL polymarket.main.price_history(t.token_id) h"
+                "LATERAL polymarket.main.price_history(t.token_id, '1w', 60) h"
             ),
             "success_criteria": (
                 "Passes a token_id to price_history(). A condition_id returns an empty series "
@@ -342,7 +350,7 @@ _AGENT_TEST_TASKS = json.dumps(
                 "SELECT bool_and(t.price BETWEEN 0 AND 1 AND t.side IN ('BUY','SELL')) IS NOT FALSE "
                 "FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false', "
                 "order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                "LATERAL polymarket.main.trades(m.condition_id) t"
+                "LATERAL polymarket.main.trades(m.condition_id, 100, '') t"
             ),
             "success_criteria": (
                 "Passes a condition_id to trades() — NOT a token_id, which returns an empty "
@@ -357,7 +365,7 @@ _AGENT_TEST_TASKS = json.dumps(
                 "SELECT bool_and(h.amount > 0) IS NOT FALSE FROM ("
                 "SELECT condition_id FROM polymarket.main.markets(closed => 'false', "
                 "order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                "LATERAL polymarket.main.holders(m.condition_id) h"
+                "LATERAL polymarket.main.holders(m.condition_id, 20) h"
             ),
             "success_criteria": "Uses holders() with a condition_id and ranks by amount.",
             "unordered": True,
@@ -464,8 +472,8 @@ _AGENT_TEST_TASKS = json.dumps(
                 "SELECT bool_and(p.avg_price BETWEEN 0 AND 1) IS NOT FALSE FROM ("
                 "SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets("
                 "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                "LATERAL polymarket.main.holders(m.condition_id) h ORDER BY h.amount DESC LIMIT 1) w, "
-                "LATERAL polymarket.main.positions(w.proxy_wallet) p"
+                "LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC LIMIT 1) w, "
+                "LATERAL polymarket.main.positions(w.proxy_wallet, 100) p"
             ),
             "success_criteria": (
                 "Chains holders() to positions(): holders() takes a condition_id and yields "
@@ -500,13 +508,33 @@ _AGENT_TEST_TASKS = json.dumps(
                 "SELECT bool_and(a.activity_type IS NOT NULL) IS NOT FALSE FROM ("
                 "SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets("
                 "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                "LATERAL polymarket.main.holders(m.condition_id) h ORDER BY h.amount DESC LIMIT 1) w, "
-                "LATERAL polymarket.main.activity(w.proxy_wallet) a"
+                "LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC LIMIT 1) w, "
+                "LATERAL polymarket.main.activity(w.proxy_wallet, 500, '') a"
             ),
             "success_criteria": (
                 "Uses activity() for history, not positions() (which is only the current "
                 "holding) and not trades() (which is keyed on a market, not a wallet). Filters "
                 "to TRADE entries, since most of a long-lived wallet's feed is yield accrual."
+            ),
+            "unordered": True,
+        },
+        {
+            "name": "what_size_actually_costs",
+            "prompt": (
+                "The spread on a Polymarket outcome looks tight. What would 5,000 shares "
+                "actually cost me, and would the book even fill it?"
+            ),
+            "check_sql": (
+                "SELECT bool_and(f.slippage >= 0) IS NOT FALSE FROM ("
+                "SELECT o.token_id FROM polymarket.main.markets(closed => 'false', "
+                "order_by => 'volume24hr', ascending => 'false') m, "
+                "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 3) t, "
+                "LATERAL polymarket.main.fill_price(t.token_id, 'buy', 5000) f"
+            ),
+            "success_criteria": (
+                "Uses fill_price() rather than reading the spread from quote(). A tight spread "
+                "says nothing about the size behind it, and avg_price is what a position "
+                "actually costs."
             ),
             "unordered": True,
         },

@@ -11,9 +11,8 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from vgi_polymarket.markets import opt_in_cache_control, origin_cache_control
+from vgi_polymarket.markets import origin_cache_control
 from vgi_polymarket.polymarket_api import CacheHint
-from vgi_polymarket.trading import _history_cache_control
 
 
 def _response(cache_control: str | None) -> httpx.Response:
@@ -71,6 +70,30 @@ class TestCacheHint:
         assert hint.max_age == 300
 
 
+class TestNoOptInCaching:
+    """There is no `cache_ttl` argument, and that is deliberate.
+
+    It only ever governed the two CLOB endpoints that declare no freshness —
+    and those are batched 200 tokens to a request, so the memoization it would
+    have bought is small. Everything else runs on Polymarket's own declared
+    TTLs. More to the point it was a *named* argument on a table-in-out
+    function, which DuckDB cannot bind: nobody could ever have passed it.
+    """
+
+    def test_no_function_declares_a_cache_ttl_argument(self) -> None:
+        import typing
+
+        from vgi_polymarket.worker import _POLYMARKET_CATALOG
+
+        offenders = []
+        for function in _POLYMARKET_CATALOG.schemas[0].functions:
+            args = getattr(function, "__orig_bases__", None)
+            for parameter in function.get_metadata().parameters:
+                if parameter.name == "cache_ttl":
+                    offenders.append(function.Meta.name)
+        assert offenders == [], f"cache_ttl is unreachable from SQL: {offenders}"
+
+
 class TestOriginPolicy:
     def test_forwards_the_declared_ttl(self) -> None:
         control = origin_cache_control(CacheHint(max_age=300))
@@ -80,38 +103,6 @@ class TestOriginPolicy:
 
     def test_live_data_is_left_uncached(self) -> None:
         assert origin_cache_control(CacheHint(saw_uncacheable=True)) is None
-
-
-class TestOptInPolicy:
-    def test_off_by_default(self) -> None:
-        assert opt_in_cache_control(0, per_value=True) is None
-
-    def test_opt_in_enables_per_value_memoization(self) -> None:
-        control = opt_in_cache_control(30, per_value=True)
-        assert control is not None
-        assert control.ttl == 30
-        assert control.per_value is True
-
-
-class TestPriceHistoryImmutability:
-    """A closed bar can never change; a forming one must not be cached long."""
-
-    NOW = 1_788_000_000
-
-    def test_a_fully_closed_window_caches_for_a_day(self) -> None:
-        control = _history_cache_control(end_ts=self.NOW - 7200, fidelity=60, now=self.NOW)
-        assert control is not None
-        assert control.ttl == 86_400
-        assert control.per_value is True
-
-    def test_a_window_running_up_to_now_is_not_cached_long(self) -> None:
-        assert _history_cache_control(end_ts=self.NOW, fidelity=60, now=self.NOW) is None
-
-    @pytest.mark.parametrize("fidelity", [1, 60, 1440])
-    def test_the_boundary_respects_the_bar_width(self, fidelity: int) -> None:
-        bar = fidelity * 60
-        assert _history_cache_control(end_ts=self.NOW - bar - 1, fidelity=fidelity, now=self.NOW) is not None
-        assert _history_cache_control(end_ts=self.NOW - bar + 1, fidelity=fidelity, now=self.NOW) is None
 
 
 class TestRetry:

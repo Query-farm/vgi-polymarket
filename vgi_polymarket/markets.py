@@ -19,8 +19,9 @@ Three constraints from the blended contract shape these signatures:
   LATERAL, so nothing here may accumulate across batches.
 * Positional args are read off ``batch`` by declared name; they are **not**
   surfaced on ``params.args``.
-* A positional ``const`` arg is rejected, so every optional knob is a *named*
-  arg instead.
+* A positional ``const`` arg is rejected, and DuckDB cannot bind a *named*
+  argument on a table-in-out function at all — so every knob these functions
+  offer is a required positional. An optional one would be unreachable.
 
 Each blended function is 1->N, so every ``emit`` carries ``parent_rows``
 provenance mapping output rows back to the input row that produced them.
@@ -80,20 +81,6 @@ def origin_cache_control(hint: CacheHint) -> CacheControl | None:
     if not hint.cacheable:
         return None
     return CacheControl(ttl=hint.max_age, stale_if_error=STALE_IF_ERROR)
-
-
-def opt_in_cache_control(ttl: int, *, per_value: bool) -> CacheControl | None:
-    """Cache metadata for an endpoint the origin does **not** declare cacheable.
-
-    The CLOB sends no freshness directive on books or quotes, so nothing there
-    is cached unless the caller explicitly asks with ``cache_ttl``. That opt-in
-    exists because a correlated LATERAL over a whole tag can repeat the same
-    token many times; ``per_value`` memoization turns a repeat into a cache hit,
-    but trades freshness for it, which is why the default is off.
-    """
-    if ttl <= 0:
-        return None
-    return CacheControl(ttl=ttl, stale_if_error=STALE_IF_ERROR, per_value=per_value)
 
 
 def emit_fanout(
@@ -390,13 +377,9 @@ class MarketsFunction(TableFunctionGenerator[MarketsArgs, KeysetScanState]):
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class ConditionIdArgs:
-    """A lone condition-id input column, plus an opt-in cache TTL."""
+    """A lone condition-id input column."""
 
     condition_id: Annotated[str, Arg(0, doc="On-chain market id to look up")]
-    cache_ttl: Annotated[
-        int,
-        Arg("cache_ttl", doc="Seconds to reuse this result for; 0 turns caching off", default=0, ge=0),
-    ] = 0
 
 
 class MarketFunction(RowTransformFunction[ConditionIdArgs]):
@@ -452,7 +435,7 @@ class MarketFunction(RowTransformFunction[ConditionIdArgs]):
                     "SELECT condition_id FROM polymarket.main.markets("
                     "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 3) s, "
                     "LATERAL polymarket.main.market(s.condition_id) m, "
-                    "LATERAL polymarket.main.trades(s.condition_id) t GROUP BY m.question",
+                    "LATERAL polymarket.main.trades(s.condition_id, 100, '') t GROUP BY m.question",
                 ),
             ),
         )
@@ -502,7 +485,7 @@ class MarketFunction(RowTransformFunction[ConditionIdArgs]):
             params.output_schema,
             rows,
             parents,
-            origin_cache_control(hint) or opt_in_cache_control(params.args.cache_ttl, per_value=True),
+            origin_cache_control(hint),
         )
 
 
@@ -686,13 +669,9 @@ class EventsFunction(TableFunctionGenerator[EventsArgs, KeysetScanState]):
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class EventIdArgs:
-    """A lone event-id input column, plus an opt-in cache TTL."""
+    """A lone event-id input column."""
 
     event_id: Annotated[str, Arg(0, doc="Gamma id of the event to look up")]
-    cache_ttl: Annotated[
-        int,
-        Arg("cache_ttl", doc="Seconds to reuse this result for; 0 turns caching off", default=0, ge=0),
-    ] = 0
 
 
 class EventFunction(RowTransformFunction[EventIdArgs]):
@@ -727,7 +706,7 @@ class EventFunction(RowTransformFunction[EventIdArgs]):
                 "those, and it reshapes them to the same columns `markets()` returns.\n\n"
                 "### One request per row\n\n"
                 "Unlike `market()`, this endpoint has no batch form, so a LATERAL costs one "
-                "request per input row. Pass `cache_ttl` when the same event repeats."
+                "request per input row, so drive it from a bounded set rather than a whole catalog."
             ),
             example_queries=examples(
                 (
@@ -793,7 +772,7 @@ class EventFunction(RowTransformFunction[EventIdArgs]):
             params.output_schema,
             rows,
             parents,
-            origin_cache_control(hint) or opt_in_cache_control(params.args.cache_ttl, per_value=True),
+            origin_cache_control(hint),
         )
 
 
@@ -844,7 +823,7 @@ class EventMarketsFunction(RowTransformFunction[EventIdArgs]):
                 "`unnest(outcomes)` to reach the tokens the order book keys on.\n\n"
                 "### One request per row\n\n"
                 "There is no batch form, so a LATERAL costs one request per event. Pass "
-                "`cache_ttl` when the same event repeats."
+                "a bounded set of events rather than a whole catalog."
             ),
             example_queries=examples(
                 (
@@ -919,7 +898,7 @@ class EventMarketsFunction(RowTransformFunction[EventIdArgs]):
             params.output_schema,
             rows,
             parents,
-            origin_cache_control(hint) or opt_in_cache_control(params.args.cache_ttl, per_value=True),
+            origin_cache_control(hint),
         )
 
 

@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      # `--no-sources` ignores [tool.uv.sources], which points vgi-python and
+      # vgi-rpc at sibling checkouts that exist only on a development machine.
+      # A release must resolve the published versions instead, and this is the
+      # step that proves it can.
+      - name: Verify it builds and tests against published dependencies
+        run: |
+          uv sync --no-sources --group dev
+          uv run --no-sources ruff format --check .
+          uv run --no-sources pytest -q
+
+      - name: Build
+        run: uv build
+
+      # A tag that disagrees with the packaged version produces a release nobody
+      # can reason about afterwards, and PyPI will not let it be replaced.
+      - name: Check the tag matches the packaged version
+        run: |
+          version="$(uv run --no-sources python -c 'import vgi_polymarket; print(vgi_polymarket.__version__)')"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "tag $tag does not match __version__ $version" >&2
+            exit 1
+          fi
+          echo "version $version matches tag $tag"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    # Trusted Publishing: PyPI mints a short-lived credential from this
+    # workflow's OIDC identity, so there is no long-lived token to store or
+    # leak. It needs a one-time setup on PyPI — add Query-farm/vgi-polymarket
+    # as a trusted publisher for the project, workflow `release.yml`,
+    # environment `pypi` — and nothing here changes when it is done.
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

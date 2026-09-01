@@ -17,6 +17,7 @@ from vgi_polymarket.markets import (
 from vgi_polymarket.reference import AllSeriesFunction, AllTagsFunction
 from vgi_polymarket.trading import (
     ActivityFunction,
+    FillPriceFunction,
     HoldersFunction,
     OrderbookFunction,
     PositionsFunction,
@@ -41,6 +42,7 @@ BLENDED = [
     HoldersFunction,
     PositionsFunction,
     ActivityFunction,
+    FillPriceFunction,
 ]
 
 #: Cursor-paged endpoints. These are stateful scans: they emit one API page per
@@ -189,6 +191,64 @@ class TestPushdownFlags:
         )
 
 
+class TestEveryArgumentIsReachable:
+    """A declared argument nobody can pass is worse than no argument.
+
+    DuckDB cannot bind a *named* argument on a table-in-out function — with or
+    without LATERAL, with a literal or an explicit cast — and the framework
+    rejects a positional with a default ("positional arguments cannot have a
+    default value ... the default would never fire"). Between them, an optional
+    argument on a blended function is unreachable: it appears in the signature,
+    it is advertised in the catalog, and every attempt to use it is a binder
+    error.
+
+    So the blended functions take required positionals only. This test is what
+    stops a well-meaning `cache_ttl` from being added back.
+    """
+
+    def test_no_blended_function_declares_a_named_argument(self) -> None:
+        blended = {f.Meta.name for f in BLENDED}
+        offenders: list[tuple[str, str]] = []
+        for function in _POLYMARKET_CATALOG.schemas[0].functions:
+            if function.Meta.name not in blended:
+                continue
+            for parameter in function.get_metadata().parameters:
+                if isinstance(parameter.position, str):
+                    offenders.append((function.Meta.name, parameter.name))
+        assert offenders == [], (
+            "these are named arguments on table-in-out functions, which DuckDB cannot "
+            f"bind — nobody can pass them: {offenders}"
+        )
+
+    def test_blended_positionals_are_all_required(self) -> None:
+        """Guard the other half: the framework rejects a positional default."""
+        blended = {f.Meta.name for f in BLENDED}
+        for function in _POLYMARKET_CATALOG.schemas[0].functions:
+            if function.Meta.name not in blended:
+                continue
+            for parameter in function.get_metadata().parameters:
+                assert parameter.required, f"{function.Meta.name}.{parameter.name}"
+
+    def test_the_scans_may_still_take_named_arguments(self) -> None:
+        """The restriction is specific to table-in-out functions."""
+        named = {
+            p.name
+            for f in _POLYMARKET_CATALOG.schemas[0].functions
+            if f.Meta.name == "markets"
+            for p in f.get_metadata().parameters
+            if isinstance(p.position, str)
+        }
+        assert "tag_id" in named and "closed" in named
+
+    def test_constrained_positionals_still_advertise_their_choices(self) -> None:
+        """A required positional keeps its discoverability."""
+        for function in _POLYMARKET_CATALOG.schemas[0].functions:
+            if function.Meta.name != "price_history":
+                continue
+            period = next(p for p in function.get_metadata().parameters if p.name == "period")
+            assert period.constraints and "1w" in period.constraints["choices"]
+
+
 class TestCatalogShape:
     def test_function_names_are_unqualified(self) -> None:
         names = {f.Meta.name for f in _POLYMARKET_CATALOG.schemas[0].functions}
@@ -205,6 +265,7 @@ class TestCatalogShape:
             "holders",
             "positions",
             "activity",
+            "fill_price",
             "search",
             "all_tags",
             "all_series",
@@ -273,7 +334,7 @@ WALLET_FUNCTIONS = ("positions", "activity")
 
 #: Functions keyed on a single outcome token. Passing a condition id is a 404 on
 #: `orderbook` and a silent empty series on `price_history`.
-TOKEN_ID_FUNCTIONS = ("orderbook", "quote", "price_history")
+TOKEN_ID_FUNCTIONS = ("orderbook", "quote", "price_history", "fill_price")
 
 
 class TestShippedExamples:

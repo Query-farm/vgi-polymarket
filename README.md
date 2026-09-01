@@ -57,10 +57,9 @@ uv run serve.py --port 8000
 ATTACH 'polymarket' (TYPE vgi, LOCATION 'http://127.0.0.1:8000');
 ```
 
-Request and response bodies are Arrow IPC, compressed with zstd when both ends
-support it and gzip otherwise. Set `VGI_HTTP_DISABLE_ZSTD=1` on the server to
-drop zstd from both the advertised and accepted sets; the client renegotiates to
-gzip on its own.
+Request and response bodies are Arrow IPC, compressed with zstd where both ends
+support it and gzip otherwise. Both transports are covered by
+`tests/test_end_to_end.py`.
 
 Both entry-point scripts carry PEP-723 headers that resolve `vgi-python` and
 `vgi-rpc` from sibling checkouts (`../vgi-python`, `../vgi-rpc`), matching this
@@ -77,7 +76,7 @@ before anything else:
 | Identifier | Looks like | Identifies | Functions that take it |
 |---|---|---|---|
 | `condition_id` | `0x` + 64 hex | the **market** (the question) | `market`, `trades`, `holders` |
-| `token_id` | a 76-digit decimal string | **one outcome** of it | `orderbook`, `quote`, `price_history` |
+| `token_id` | a 76-digit decimal string | **one outcome** of it | `orderbook`, `quote`, `price_history`, `fill_price` |
 | `proxy_wallet` | `0x` + 40 hex | **a trader** | `positions`, `activity` |
 
 The third key is less confusable — nothing calls it `market` — and it comes
@@ -150,51 +149,44 @@ before DuckDB sees a row: a `LIMIT 10` still pays for the whole catalog, and
 because a scan blocked inside its first batch cannot be cancelled, the query
 *wedges the client* rather than merely running slowly.
 
-| Function | Positional (per-row) | Named |
-|---|---|---|
-| `search(query)` *(scan)* | — | `events_status` |
-| `markets()` *(scan)* | — | `tag_id`, `slug`, `condition_id`, `closed`, `active`, `order_by`, `ascending` |
-| `market(condition_id)` | condition_id | `cache_ttl` |
-| `events()` *(scan)* | — | `tag_id`, `series_slug`, `slug`, `closed`, `featured`, `title_search`, `order_by`, `ascending` |
-| `event(event_id)` | event_id | `cache_ttl` |
-| `event_markets(event_id)` | event_id | `cache_ttl` |
-| `orderbook(token_id)` | token_id | `depth`, `cache_ttl` |
-| `quote(token_id)` | token_id | `cache_ttl` |
-| `price_history(token_id)` | token_id | `period`, `fidelity`, `start_ts`, `end_ts` |
-| `trades(condition_id)` | condition_id | `side`, `max_rows`, `cache_ttl` |
-| `holders(condition_id)` | condition_id | `max_rows`, `cache_ttl` |
-| `positions(proxy_wallet)` | proxy_wallet | `max_rows`, `cache_ttl` |
-| `activity(proxy_wallet)` | proxy_wallet | `activity_type`, `max_rows`, `cache_ttl` |
+| Function | Arguments |
+|---|---|
+| `search(query)` *(scan)* | `query`, plus named `events_status` |
+| `markets()` *(scan)* | all named: `tag_id`, `slug`, `condition_id`, `closed`, `active`, `order_by`, `ascending` |
+| `events()` *(scan)* | all named: `tag_id`, `series_slug`, `slug`, `closed`, `featured`, `title_search`, `order_by`, `ascending` |
+| `market(condition_id)` | — |
+| `event(event_id)` | — |
+| `event_markets(event_id)` | — |
+| `orderbook(token_id)` | — |
+| `quote(token_id)` | — |
+| `fill_price(token_id, side, size)` | `side` is `buy`/`sell`; `size` in shares |
+| `price_history(token_id, period, fidelity)` | period is `1h`/`6h`/`1d`/`1w`/`1m`/`max`; fidelity in minutes |
+| `trades(condition_id, max_rows, side)` | `max_rows` 0 for all; `side` `''` for both |
+| `holders(condition_id, max_rows)` | max_rows per outcome |
+| `positions(proxy_wallet, max_rows)` | `max_rows` 0 for all |
+| `activity(proxy_wallet, max_rows, activity_type)` | `activity_type` `''` for every kind |
 
-### Named arguments bind on the scans, not on the rest
+### Every argument is one you can actually pass
 
-`markets()` and `events()` are ordinary table functions, and their named
-arguments work:
+The two catalog scans take named arguments, which bind normally. **Every other
+function takes only required positionals**, and that is forced rather than
+chosen: DuckDB cannot bind a named argument on a table-in-out function, and the
+framework rejects a positional with a default. An optional knob on one of these
+would be unreachable from SQL — declared in the signature, advertised in the
+catalog, and impossible to call.
+
+So there are none. Where a knob earns its place it is positional and mandatory —
+`price_history` must be told its window, `trades` how much tape it may pull —
+and where it does not, it is gone. `depth` on `orderbook()` went because the
+batched endpoint returns the whole book regardless and SQL caps it exactly:
 
 ```sql
-SELECT question FROM polymarket.markets(closed => 'false', order_by => 'volume24hr');
+QUALIFY row_number() OVER (PARTITION BY side ORDER BY price DESC) <= 5
 ```
 
-Every other function is a *table-in-out* function, and **DuckDB's binder cannot
-currently bind a named argument on one** — with or without `LATERAL`, with a
-literal or an explicit cast:
-
-```
-Binder Error: No function matches the given name and argument types 'trades(VARCHAR, INTEGER)'
-Candidate functions:
-    trades(VARCHAR, max_rows : BIGINT, side : VARCHAR, cache_ttl : BIGINT)
-```
-
-The arguments are still declared, because the framework supports the shape
-(`vgi-python`'s own blended tests assert it resolves) and the defaults are what
-every call receives. They are chosen to be the right answer untuned:
-`max_rows` 1000 on the tape and 100 on holders, `period` `'1w'` at hourly
-`fidelity`, `depth` unlimited, `cache_ttl` off. Nothing this worker advertises
-depends on passing one, and `tests/test_catalog.py` fails the build if an
-example starts to — so when the binder catches up, these become live knobs with
-no change here. `Arg` also rejects a positional argument with a default, so
-"make them positional" is not an alternative; the framework directs optional
-arguments to the named form.
+`cache_ttl` went with it. It only ever governed the two CLOB endpoints that
+declare no freshness, and those are already batched 200-to-a-request; everything
+else runs on Polymarket's own declared TTLs, forwarded rather than invented.
 
 ### Why there is no `markets(event_slug => …)`
 
@@ -372,9 +364,9 @@ SELECT p.title, p.outcome, p.size, p.cash_pnl
 FROM (SELECT h.proxy_wallet
       FROM (SELECT condition_id FROM polymarket.markets(
               closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m,
-           LATERAL polymarket.holders(m.condition_id) h
+           LATERAL polymarket.holders(m.condition_id, 20) h
       ORDER BY h.amount DESC LIMIT 1) w,
-     LATERAL polymarket.positions(w.proxy_wallet) p
+     LATERAL polymarket.positions(w.proxy_wallet, 100) p
 ORDER BY p.current_value DESC;
 ```
 
@@ -389,6 +381,34 @@ price and a side; the others leave them NULL rather than reporting a misleading
 zero. The declared `activity_type` values are the ones observed live, and
 `tests/test_live.py` fails if the API starts emitting one this worker does not
 declare.
+
+## What a price costs at size
+
+`quote()` gives the touch. `fill_price(token_id, side, size)` walks the book and
+tells you what a position would actually cost:
+
+```sql
+SELECT o.outcome, q.midpoint, f.avg_price, f.slippage, f.fully_filled
+FROM polymarket.markets(closed => 'false', order_by => 'volume24hr',
+                        ascending => 'false') m,
+     LATERAL (SELECT unnest(m.outcomes, recursive := true)) o,
+     LATERAL polymarket.quote(o.token_id) q,
+     LATERAL polymarket.fill_price(o.token_id, 'buy', 5000) f;
+```
+
+This exists because the spread is not liquidity. A live market quoted a
+one-tick spread — 0.001, which reads as institutional — on **15 shares**.
+Another quoted 0.02 bid against 0.99 ask, a spread of 0.97, on a book holding
+one order a side. Neither number tells you what size costs, and ranking
+candidates by midpoint is a different ranking from ranking them by
+`avg_price` at the size you actually intend to trade.
+
+`slippage` is signed so it is always the cost of size, never a direction — it
+cannot come out negative. `fully_filled = false` means the book ran out: the row
+prices the portion that could fill, and the rest of the order would move the
+price further than it reports. It reuses the same batched book fetch
+`orderbook()` uses, so driving both from one query costs one round trip per 200
+tokens.
 
 ## Caching
 
@@ -567,6 +587,23 @@ correct answer. The invariants assert real properties instead (prices are
 probabilities, an ask is never below a bid, a book side is labelled `bid` or
 `ask`), so they still test something. `tests/test_catalog.py::TestAgentTasks`
 keeps it that way.
+
+## Releasing
+
+`.github/workflows/ci.yml` runs format and the offline suite on every push and
+pull request, and the live suite on pushes only — a fork's PR should not be able
+to fail on someone else's rate limit.
+
+Pushing a `v*` tag builds, verifies the tag matches `__version__`, and publishes
+to PyPI through Trusted Publishing, so there is no token to store. Both the CI
+and release builds resolve dependencies with `--no-sources`: `[tool.uv.sources]`
+points `vgi-python` and `vgi-rpc` at sibling checkouts that exist only on a
+development machine, and a release has to prove it works against the published
+versions instead.
+
+PyPI needs one manual step before the first release: add this repository as a
+trusted publisher for the `vgi-polymarket` project, workflow `release.yml`,
+environment `pypi`.
 
 ## License
 

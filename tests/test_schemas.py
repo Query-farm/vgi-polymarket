@@ -9,12 +9,14 @@ import pytest
 
 from vgi_polymarket.schemas import (
     AMOUNT,
+    FILL_SCHEMA,
     EVENT_SCHEMA,
     MARKET_SCHEMA,
     ORDERBOOK_SCHEMA,
     PRICE,
     TRADE_SCHEMA,
     batch_from_rows,
+    fill_from_book,
     flatten_book,
     flatten_holders,
     flatten_price_history,
@@ -274,3 +276,70 @@ class TestOtherFlattening:
         )
         assert batch.column("price").to_pylist() == [Decimal("0.955000")]
         assert batch.column("size").to_pylist() == [Decimal("100.000000")]
+
+
+class TestFillPrice:
+    """Walking the book turns a spread into a cost.
+
+    The touch is a real price at which possibly nothing trades: a live market
+    quoted a one-tick spread on fifteen shares. These assertions pin the walk,
+    including the case the top of book cannot express at all — a request the
+    book cannot cover.
+    """
+
+    BOOK = {
+        "asks": [
+            {"price": "0.46", "size": "500"},
+            {"price": "0.45", "size": "100"},
+            {"price": "0.50", "size": "1000"},
+        ],
+        "bids": [{"price": "0.44", "size": "50"}, {"price": "0.40", "size": "900"}],
+    }
+
+    def test_a_buy_consumes_the_cheapest_asks_first(self) -> None:
+        row = fill_from_book("t", "buy", 300, self.BOOK)
+        # 100 @ 0.45 then 200 @ 0.46 = 137.0 over 300 shares.
+        assert row["filled_size"] == Decimal(300)
+        assert row["touch_price"] == Decimal("0.45")
+        assert row["worst_price"] == Decimal("0.46")
+        assert row["levels_consumed"] == 2
+        assert row["notional"] == Decimal("137.00")
+
+    def test_a_sell_consumes_the_dearest_bids_first(self) -> None:
+        row = fill_from_book("t", "sell", 60, self.BOOK)
+        assert row["touch_price"] == Decimal("0.44")
+        assert row["worst_price"] == Decimal("0.40")
+        assert row["levels_consumed"] == 2
+
+    def test_slippage_is_the_cost_of_size_in_both_directions(self) -> None:
+        """Signed so it is never negative: it is what size cost, not a direction."""
+        assert fill_from_book("t", "buy", 300, self.BOOK)["slippage"] > 0
+        assert fill_from_book("t", "sell", 60, self.BOOK)["slippage"] > 0
+
+    def test_a_touch_sized_order_has_no_slippage(self) -> None:
+        assert fill_from_book("t", "buy", 100, self.BOOK)["slippage"] == 0
+
+    def test_a_book_that_cannot_cover_the_request_says_so(self) -> None:
+        """The case the touch cannot express: there is not enough there."""
+        row = fill_from_book("t", "buy", 100_000, self.BOOK)
+        assert row["fully_filled"] is False
+        assert row["filled_size"] == Decimal(1600)
+        assert row["requested_size"] == Decimal(100_000)
+        assert row["avg_price"] is not None, "the fillable portion is still priced"
+
+    def test_an_empty_book_fills_nothing_without_raising(self) -> None:
+        row = fill_from_book("t", "buy", 100, {})
+        assert row["filled_size"] == Decimal(0)
+        assert row["fully_filled"] is False
+        assert row["avg_price"] is None and row["slippage"] is None
+
+    def test_zero_size_levels_are_ignored(self) -> None:
+        row = fill_from_book(
+            "t", "buy", 10, {"asks": [{"price": "0.10", "size": "0"}, {"price": "0.20", "size": "10"}]}
+        )
+        assert row["touch_price"] == Decimal("0.20")
+
+    def test_it_builds_against_the_declared_schema(self) -> None:
+        batch = batch_from_rows([fill_from_book("t", "buy", 300, self.BOOK)], FILL_SCHEMA)
+        assert batch.schema == FILL_SCHEMA
+        assert batch.column("avg_price").to_pylist() == [Decimal("0.456667")]

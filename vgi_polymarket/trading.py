@@ -43,11 +43,12 @@ from vgi.table_in_out_function import RowTransformFunction
 from vgi_rpc.rpc import OutputCollector
 
 from vgi_polymarket import polymarket_api as api
-from vgi_polymarket.markets import emit_fanout, opt_in_cache_control, origin_cache_control
+from vgi_polymarket.markets import emit_fanout, origin_cache_control
 from vgi_polymarket.meta import docs, examples
 from vgi_polymarket.polymarket_api import STALE_IF_ERROR, CacheHint, NotFound
 from vgi_polymarket.schemas import (
     ACTIVITY_SCHEMA,
+    FILL_SCHEMA,
     HOLDER_SCHEMA,
     ORDERBOOK_SCHEMA,
     POSITION_SCHEMA,
@@ -55,6 +56,7 @@ from vgi_polymarket.schemas import (
     QUOTE_SCHEMA,
     TRADE_SCHEMA,
     activity_row,
+    fill_from_book,
     flatten_book,
     flatten_holders,
     flatten_price_history,
@@ -63,71 +65,31 @@ from vgi_polymarket.schemas import (
     trade_row,
 )
 
-#: A price-history window that ends in the past can never change again, so it is
-#: cached for a day rather than for the origin's 90-second directive.
-_CLOSED_WINDOW_TTL = 86_400
-
-
-def _history_cache_control(*, end_ts: int, fidelity: int, now: int) -> CacheControl | None:
-    """Cacheability for a price-history window, decided by whether it is closed.
-
-    A sampled point is immutable once its bar has elapsed, so a window ending
-    before the current bar began can never change and is safely cached for a
-    long time. A window running up to now contains a point that is still moving,
-    and gets the origin's own 90 seconds instead — the CLOB does declare a TTL
-    here, unlike on the book.
-    """
-    bar_seconds = max(fidelity, 1) * 60
-    if end_ts > now - bar_seconds:
-        return None
-    return CacheControl(ttl=_CLOSED_WINDOW_TTL, stale_if_error=STALE_IF_ERROR, per_value=True)
-
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class TokenArgs:
-    """A lone outcome-token input column, plus an opt-in cache TTL."""
+    """A lone outcome-token input column."""
 
     token_id: Annotated[str, Arg(0, doc="Outcome token to read, from a market's outcomes list")]
-    cache_ttl: Annotated[
-        int,
-        Arg("cache_ttl", doc="Seconds to reuse this result for; 0 turns caching off", default=0, ge=0),
-    ] = 0
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class OrderbookArgs:
-    """``orderbook(token_id)`` with an optional depth cap."""
+    """A lone outcome-token input column.
+
+    There is deliberately no ``depth`` argument. The batched endpoint returns
+    the whole book regardless of what is asked for, so a cap could only ever be
+    applied here — and SQL already expresses it exactly, without a knob:
+
+        QUALIFY row_number() OVER (
+            PARTITION BY side ORDER BY price DESC
+        ) <= 5
+
+    An argument that does no work the query language cannot is surface to
+    maintain rather than capability to offer.
+    """
 
     token_id: Annotated[str, Arg(0, doc="Outcome token to read, from a market's outcomes list")]
-    #: 0 means "no cap". `POST /books` takes no depth parameter, so the whole
-    #: book arrives and the best levels are kept here instead.
-    depth: Annotated[
-        int, Arg("depth", doc="Keep only this many levels per side; 0 keeps all of them", default=0, ge=0)
-    ] = 0
-    cache_ttl: Annotated[
-        int,
-        Arg("cache_ttl", doc="Seconds to reuse this book for; 0 turns caching off", default=0, ge=0),
-    ] = 0
-
-
-def _cap_depth(levels: list[dict[str, Any]], depth: int) -> list[dict[str, Any]]:
-    """Keep only the best ``depth`` levels per side.
-
-    "Best" is the top of each side's book, which is opposite by side: the
-    highest bid a buyer will pay, and the lowest ask a seller will take. Sorting
-    both the same way would silently return the *worst* asks.
-    """
-    from vgi_polymarket.schemas import to_decimal
-
-    out: list[dict[str, Any]] = []
-    for side, reverse in (("bid", True), ("ask", False)):
-        ranked = sorted(
-            (level for level in levels if level["side"] == side),
-            key=lambda level: to_decimal(level["price"]) or 0,
-            reverse=reverse,
-        )
-        out.extend(ranked[:depth])
-    return out
 
 
 class OrderbookFunction(RowTransformFunction[OrderbookArgs]):
@@ -162,8 +124,9 @@ class OrderbookFunction(RowTransformFunction[OrderbookArgs]):
                 "### Reading the two sides\n\n"
                 "`bid` rows are buyers, `ask` rows are sellers, and the outcomes of a binary "
                 "market mirror each other: a Yes bid at 0.40 is economically a No ask at 0.60. "
-                "`depth` would keep the best N levels per side — highest bids, lowest asks — "
-                "but see the note below on the optional arguments.\n\n"
+                "There is no `depth` argument: the batched endpoint returns the whole book "
+                "either way, and SQL caps it exactly — `QUALIFY row_number() OVER (PARTITION BY "
+                "side ORDER BY price DESC) <= 5`.\n\n"
                 "### Cost under LATERAL\n\n"
                 "Books are fetched in batches of up to 200 tokens per request, which is what "
                 "makes a join across a whole topic affordable: measured at 12.85s for 100 books "
@@ -229,8 +192,6 @@ class OrderbookFunction(RowTransformFunction[OrderbookArgs]):
                 if token_id is None:
                     continue
                 levels = flatten_book(str(token_id), books.get(str(token_id)) or {})
-                if depth := params.args.depth:
-                    levels = _cap_depth(levels, depth)
                 rows.extend(levels)
                 parents.extend([index] * len(levels))
         emit_fanout(
@@ -238,7 +199,7 @@ class OrderbookFunction(RowTransformFunction[OrderbookArgs]):
             params.output_schema,
             rows,
             parents,
-            opt_in_cache_control(params.args.cache_ttl, per_value=True),
+            None,
         )
 
 
@@ -286,15 +247,9 @@ class QuoteFunction(RowTransformFunction[TokenArgs]):
                 "Two batched requests per 200 tokens regardless of how many rows drive it, so a "
                 "quote across a whole topic is cheap.\n\n"
                 "### Freshness\n\n"
-                "The CLOB declares no cacheability on quotes, so nothing is cached by default, "
-                "and `cache_ttl` would enable per-value memoization — but see the note on the "
-                "optional arguments below.\n\n"
-                "### The optional arguments do not bind yet\n\n"
-                "`cache_ttl` is declared, and its default is what every call receives, but "
-                "DuckDB's binder cannot currently bind a named argument on a table-in-out "
-                "function — so passing one is a binder error today rather than a tuning knob. "
-                "The defaults are chosen to be the right answer untuned. Named arguments on "
-                "`markets()` and `events()` are unaffected: those are ordinary scans."
+                "The CLOB declares no cacheability on quotes, so nothing here is cached. That "
+                "is the honest policy for a top-of-book read: the number is only worth having "
+                "if it is current."
             ),
             example_queries=examples(
                 (
@@ -369,36 +324,31 @@ class QuoteFunction(RowTransformFunction[TokenArgs]):
             params.output_schema,
             rows,
             parents,
-            opt_in_cache_control(params.args.cache_ttl, per_value=True),
+            None,
         )
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class PriceHistoryArgs:
-    """``price_history(token_id)`` over a lookback period or an explicit window."""
+    """``price_history(token_id, period, fidelity)`` — all three required.
+
+    The window is the substance of this call, not a decoration on it, so it is
+    positional and mandatory. That is also the only shape that works: DuckDB
+    cannot bind a named argument on a table-in-out function, and the framework
+    rejects a positional with a default, so an optional knob here would be one
+    nobody could ever pass.
+
+    There is no explicit ``start_ts``/``end_ts`` window for the same reason —
+    two more required arguments to serve a rarer case is a bad trade, and
+    ``period`` covers it.
+    """
 
     token_id: Annotated[str, Arg(0, doc="Outcome token to chart, from a market's outcomes list")]
     period: Annotated[
         str,
-        Arg(
-            "period",
-            doc="How far back to look, ending now; ignored when start_ts is given",
-            default="1w",
-            choices=["1h", "6h", "1d", "1w", "1m", "max"],
-        ),
-    ] = "1w"
-    fidelity: Annotated[
-        int,
-        Arg("fidelity", doc="Minutes between sampled points", default=60, ge=1, le=10080),
-    ] = 60
-    #: 0 means "not supplied" — see the sentinel note on MarketsArgs.
-    start_ts: Annotated[
-        int,
-        Arg("start_ts", doc="Window start as an epoch second; 0 uses the period instead", default=0, ge=0),
-    ] = 0
-    end_ts: Annotated[
-        int, Arg("end_ts", doc="Window end as an epoch second; 0 means now", default=0, ge=0)
-    ] = 0
+        Arg(1, doc="How far back to look, ending now", choices=["1h", "6h", "1d", "1w", "1m", "max"]),
+    ]
+    fidelity: Annotated[int, Arg(2, doc="Minutes between sampled points", ge=1, le=10080)]
 
 
 class PriceHistoryFunction(RowTransformFunction[PriceHistoryArgs]):
@@ -455,7 +405,7 @@ class PriceHistoryFunction(RowTransformFunction[PriceHistoryArgs]):
                     "SELECT o.token_id FROM polymarket.main.markets("
                     "closed => 'false', order_by => 'volume24hr', ascending => 'false') m, "
                     "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, "
-                    "LATERAL polymarket.main.price_history(t.token_id) h ORDER BY h.ts",
+                    "LATERAL polymarket.main.price_history(t.token_id, '1w', 60) h ORDER BY h.ts",
                 ),
                 (
                     "How far each outcome moved over the last day",
@@ -463,7 +413,7 @@ class PriceHistoryFunction(RowTransformFunction[PriceHistoryArgs]):
                     "FROM (SELECT outcomes FROM polymarket.main.markets(closed => 'false', "
                     "order_by => 'volume24hr', ascending => 'false') LIMIT 3) m, "
                     "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
-                    "LATERAL polymarket.main.price_history(o.token_id) h "
+                    "LATERAL polymarket.main.price_history(o.token_id, '1w', 60) h "
                     "GROUP BY o.outcome ORDER BY swing DESC",
                 ),
             ),
@@ -475,7 +425,7 @@ class PriceHistoryFunction(RowTransformFunction[PriceHistoryArgs]):
                     "SELECT o.token_id FROM polymarket.main.markets("
                     "closed => 'false', order_by => 'volume24hr', ascending => 'false') m, "
                     "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, "
-                    "LATERAL polymarket.main.price_history(t.token_id) h ORDER BY h.ts"
+                    "LATERAL polymarket.main.price_history(t.token_id, '1w', 60) h ORDER BY h.ts"
                 ),
                 description="A week of hourly implied probability for the busiest open market",
             ),
@@ -493,27 +443,30 @@ class PriceHistoryFunction(RowTransformFunction[PriceHistoryArgs]):
         batch: pa.RecordBatch,
         out: OutputCollector,
     ) -> None:
-        now = int(time.time())
+        # Positional arguments on a blended function are per-row INPUT COLUMNS,
+        # read off `batch`. They are not surfaced on `params.args`, which still
+        # holds the dataclass defaults — reading the window from there silently
+        # fetched the default one for every row.
         tokens = batch.column("token_id").to_pylist()
+        periods = batch.column("period").to_pylist()
+        fidelities = batch.column("fidelity").to_pylist()
         rows: list[dict[str, Any]] = []
         parents: list[int] = []
         hint = CacheHint()
-        start_ts = params.args.start_ts or None
-        end_ts = params.args.end_ts or (now if start_ts else 0)
         with api.open_client() as client:
-            for index, token_id in enumerate(tokens):
+            for index, (token_id, period, fidelity) in enumerate(
+                zip(tokens, periods, fidelities, strict=True)
+            ):
                 if token_id is None:
                     continue
                 try:
                     history = api.price_history(
                         str(token_id),
                         # The wire parameter is still called `interval`; the SQL
-                        # argument is `period` because `interval` is a DuckDB type
-                        # keyword and `interval => '1w'` is a parser error.
-                        interval=params.args.period,
-                        start_ts=start_ts,
-                        end_ts=end_ts or None,
-                        fidelity=params.args.fidelity,
+                        # argument is `period` because `interval` is a DuckDB
+                        # type keyword and `interval => '1w'` is a parser error.
+                        interval=str(period) if period else "1w",
+                        fidelity=int(fidelity) if fidelity else 60,
                         client=client,
                         hint=hint,
                     )
@@ -522,36 +475,29 @@ class PriceHistoryFunction(RowTransformFunction[PriceHistoryArgs]):
                 flat = flatten_price_history(str(token_id), history)
                 rows.extend(flat)
                 parents.extend([index] * len(flat))
-        # A closed window beats the origin's TTL; an open one falls back to it.
-        cache_control = (
-            _history_cache_control(end_ts=end_ts, fidelity=params.args.fidelity, now=now)
-            if start_ts
-            else None
-        ) or origin_cache_control(hint)
-        emit_fanout(out, params.output_schema, rows, parents, cache_control)
+        # The window always ends now, so the last point is still forming; the
+        # origin's own 90-second TTL is the right and only policy here.
+        emit_fanout(out, params.output_schema, rows, parents, origin_cache_control(hint))
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class TradesArgs:
-    """``trades(condition_id)`` over the market's tape."""
+    """``trades(condition_id, max_rows, side)`` — all three required.
+
+    ``max_rows`` is mandatory rather than defaulted because an active market's
+    tape is effectively unbounded, and ``side`` because it changes what the API
+    returns rather than merely what SQL keeps. Pass ``0`` for every row and
+    ``''`` for both sides.
+    """
 
     condition_id: Annotated[str, Arg(0, doc="On-chain market id whose tape to read")]
+    max_rows: Annotated[int, Arg(1, doc="Stop after this many trades; 0 fetches the whole tape", ge=0)]
     side: Annotated[
         str,
         Arg(
-            "side",
-            doc="Keep only trades where the taker went this way",
-            default="",
-            choices=["", "BUY", "SELL"],
+            2, doc="Keep only trades the taker went this way on; empty for both", choices=["", "BUY", "SELL"]
         ),
-    ] = ""
-    max_rows: Annotated[
-        int, Arg("max_rows", doc="Stop after this many trades per market; 0 fetches all", default=1000, ge=0)
-    ] = 1000
-    cache_ttl: Annotated[
-        int,
-        Arg("cache_ttl", doc="Seconds to reuse this tape for; 0 turns caching off", default=0, ge=0),
-    ] = 0
+    ]
 
 
 class TradesFunction(RowTransformFunction[TradesArgs]):
@@ -591,8 +537,9 @@ class TradesFunction(RowTransformFunction[TradesArgs]):
                 "ordinary public chain data, and it is what makes flow analysis possible here "
                 "in a way it is not on a conventional exchange.\n\n"
                 "### Volume\n\n"
-                "An active market can have a very long tape, so `max_rows` defaults to 1000, which "
-                "is what every call gets — see the note below on the optional arguments. "
+                "An active market can have a very long tape, which is why `max_rows` is "
+                "required rather than defaulted — the call should say how much it wants. Pass "
+                "0 for the whole history, and expect it to take a while. "
                 "Pass 0 for the whole history, and expect it to take a while.\n\n"
                 "### Prices arrive as floats\n\n"
                 "The Data API sends price and size as JSON numbers rather than strings. They are "
@@ -605,7 +552,7 @@ class TradesFunction(RowTransformFunction[TradesArgs]):
                     "SELECT t.ts, t.side, t.outcome, t.price, t.size, t.trader_name FROM ("
                     "SELECT condition_id FROM polymarket.main.markets("
                     "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.trades(m.condition_id) t "
+                    "LATERAL polymarket.main.trades(m.condition_id, 100, '') t "
                     "ORDER BY t.ts DESC",
                 ),
                 (
@@ -613,7 +560,7 @@ class TradesFunction(RowTransformFunction[TradesArgs]):
                     "SELECT t.outcome, sum(t.price * t.size) / sum(t.size) AS vwap FROM ("
                     "SELECT condition_id FROM polymarket.main.markets("
                     "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.trades(m.condition_id) t "
+                    "LATERAL polymarket.main.trades(m.condition_id, 100, '') t "
                     "GROUP BY t.outcome",
                 ),
             ),
@@ -624,7 +571,7 @@ class TradesFunction(RowTransformFunction[TradesArgs]):
                     "SELECT t.ts, t.side, t.outcome, t.price, t.size, t.trader_name FROM ("
                     "SELECT condition_id FROM polymarket.main.markets("
                     "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.trades(m.condition_id) t "
+                    "LATERAL polymarket.main.trades(m.condition_id, 100, '') t "
                     "ORDER BY t.ts DESC"
                 ),
                 description="The most recent prints on the busiest open market",
@@ -644,17 +591,19 @@ class TradesFunction(RowTransformFunction[TradesArgs]):
         out: OutputCollector,
     ) -> None:
         ids = batch.column("condition_id").to_pylist()
+        caps = batch.column("max_rows").to_pylist()
+        sides = batch.column("side").to_pylist()
         rows: list[dict[str, Any]] = []
         parents: list[int] = []
         hint = CacheHint()
         with api.open_client() as client:
-            for index, condition_id in enumerate(ids):
+            for index, (condition_id, cap, side) in enumerate(zip(ids, caps, sides, strict=True)):
                 if condition_id is None:
                     continue
                 found = api.trades(
                     str(condition_id),
-                    side=params.args.side or None,
-                    limit=params.args.max_rows or None,
+                    side=str(side) if side else None,
+                    limit=int(cap) if cap else None,
                     client=client,
                     hint=hint,
                 )
@@ -665,22 +614,16 @@ class TradesFunction(RowTransformFunction[TradesArgs]):
             params.output_schema,
             rows,
             parents,
-            origin_cache_control(hint) or opt_in_cache_control(params.args.cache_ttl, per_value=True),
+            origin_cache_control(hint),
         )
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class HoldersArgs:
-    """``holders(condition_id)`` — the largest positions in one market."""
+    """``holders(condition_id, max_rows)`` — the largest positions in one market."""
 
     condition_id: Annotated[str, Arg(0, doc="On-chain market id whose holders to list")]
-    max_rows: Annotated[
-        int, Arg("max_rows", doc="How many holders to return per outcome", default=100, ge=1, le=1000)
-    ] = 100
-    cache_ttl: Annotated[
-        int,
-        Arg("cache_ttl", doc="Seconds to reuse this list for; 0 turns caching off", default=0, ge=0),
-    ] = 0
+    max_rows: Annotated[int, Arg(1, doc="How many holders to return per outcome", ge=1, le=1000)]
 
 
 class HoldersFunction(RowTransformFunction[HoldersArgs]):
@@ -724,7 +667,7 @@ class HoldersFunction(RowTransformFunction[HoldersArgs]):
                     "SELECT h.outcome_index, h.holder_name, h.amount FROM ("
                     "SELECT condition_id FROM polymarket.main.markets("
                     "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.holders(m.condition_id) h "
+                    "LATERAL polymarket.main.holders(m.condition_id, 20) h "
                     "ORDER BY h.amount DESC",
                 ),
                 (
@@ -733,7 +676,7 @@ class HoldersFunction(RowTransformFunction[HoldersArgs]):
                     "max(h.amount) / sum(h.amount) AS top_holder_share FROM ("
                     "SELECT condition_id FROM polymarket.main.markets("
                     "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.holders(m.condition_id) h GROUP BY h.token_id",
+                    "LATERAL polymarket.main.holders(m.condition_id, 20) h GROUP BY h.token_id",
                 ),
             ),
         )
@@ -743,7 +686,7 @@ class HoldersFunction(RowTransformFunction[HoldersArgs]):
                     "SELECT h.outcome_index, h.holder_name, h.amount FROM ("
                     "SELECT condition_id FROM polymarket.main.markets("
                     "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.holders(m.condition_id) h "
+                    "LATERAL polymarket.main.holders(m.condition_id, 20) h "
                     "ORDER BY h.amount DESC"
                 ),
                 description="The biggest positions in the busiest open market",
@@ -763,18 +706,19 @@ class HoldersFunction(RowTransformFunction[HoldersArgs]):
         out: OutputCollector,
     ) -> None:
         ids = batch.column("condition_id").to_pylist()
+        caps = batch.column("max_rows").to_pylist()
         rows: list[dict[str, Any]] = []
         parents: list[int] = []
         hint = CacheHint()
         with api.open_client() as client:
-            for index, condition_id in enumerate(ids):
+            for index, (condition_id, cap) in enumerate(zip(ids, caps, strict=True)):
                 if condition_id is None:
                     continue
                 found = flatten_holders(
                     str(condition_id),
                     api.holders(
                         str(condition_id),
-                        limit=params.args.max_rows,
+                        limit=int(cap) if cap else None,
                         client=client,
                         hint=hint,
                     ),
@@ -786,23 +730,16 @@ class HoldersFunction(RowTransformFunction[HoldersArgs]):
             params.output_schema,
             rows,
             parents,
-            origin_cache_control(hint) or opt_in_cache_control(params.args.cache_ttl, per_value=True),
+            origin_cache_control(hint),
         )
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class PositionsArgs:
-    """``positions(proxy_wallet)`` — every open position one wallet holds."""
+    """``positions(proxy_wallet, max_rows)`` — every open position one wallet holds."""
 
     proxy_wallet: Annotated[str, Arg(0, doc="Wallet address whose open positions to list")]
-    max_rows: Annotated[
-        int,
-        Arg("max_rows", doc="Stop after this many positions per wallet; 0 fetches all", default=500, ge=0),
-    ] = 500
-    cache_ttl: Annotated[
-        int,
-        Arg("cache_ttl", doc="Seconds to reuse this list for; 0 turns caching off", default=0, ge=0),
-    ] = 0
+    max_rows: Annotated[int, Arg(1, doc="Stop after this many positions; 0 fetches all of them", ge=0)]
 
 
 class PositionsFunction(RowTransformFunction[PositionsArgs]):
@@ -859,9 +796,9 @@ class PositionsFunction(RowTransformFunction[PositionsArgs]):
                     "SELECT p.title, p.outcome, p.size, p.cash_pnl FROM ("
                     "SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets("
                     "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.holders(m.condition_id) h "
+                    "LATERAL polymarket.main.holders(m.condition_id, 20) h "
                     "ORDER BY h.amount DESC LIMIT 1) w, "
-                    "LATERAL polymarket.main.positions(w.proxy_wallet) p "
+                    "LATERAL polymarket.main.positions(w.proxy_wallet, 100) p "
                     "ORDER BY p.current_value DESC",
                 ),
                 (
@@ -870,9 +807,9 @@ class PositionsFunction(RowTransformFunction[PositionsArgs]):
                     "sum(p.cash_pnl) AS unrealised FROM ("
                     "SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets("
                     "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.holders(m.condition_id) h "
+                    "LATERAL polymarket.main.holders(m.condition_id, 20) h "
                     "ORDER BY h.amount DESC LIMIT 1) w, "
-                    "LATERAL polymarket.main.positions(w.proxy_wallet) p",
+                    "LATERAL polymarket.main.positions(w.proxy_wallet, 100) p",
                 ),
             ),
         )
@@ -882,9 +819,9 @@ class PositionsFunction(RowTransformFunction[PositionsArgs]):
                     "SELECT p.title, p.outcome, p.size, p.cash_pnl FROM ("
                     "SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets("
                     "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.holders(m.condition_id) h "
+                    "LATERAL polymarket.main.holders(m.condition_id, 20) h "
                     "ORDER BY h.amount DESC LIMIT 1) w, "
-                    "LATERAL polymarket.main.positions(w.proxy_wallet) p "
+                    "LATERAL polymarket.main.positions(w.proxy_wallet, 100) p "
                     "ORDER BY p.current_value DESC"
                 ),
                 description="What else the biggest holder in a busy market is betting on",
@@ -904,16 +841,17 @@ class PositionsFunction(RowTransformFunction[PositionsArgs]):
         out: OutputCollector,
     ) -> None:
         wallets = batch.column("proxy_wallet").to_pylist()
+        caps = batch.column("max_rows").to_pylist()
         rows: list[dict[str, Any]] = []
         parents: list[int] = []
         hint = CacheHint()
         with api.open_client() as client:
-            for index, wallet in enumerate(wallets):
+            for index, (wallet, cap) in enumerate(zip(wallets, caps, strict=True)):
                 if wallet is None:
                     continue
                 found = api.positions(
                     str(wallet),
-                    limit=params.args.max_rows or None,
+                    limit=int(cap) if cap else None,
                     client=client,
                     hint=hint,
                 )
@@ -924,26 +862,32 @@ class PositionsFunction(RowTransformFunction[PositionsArgs]):
             params.output_schema,
             rows,
             parents,
-            origin_cache_control(hint) or opt_in_cache_control(params.args.cache_ttl, per_value=True),
+            origin_cache_control(hint),
         )
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class ActivityArgs:
-    """``activity(proxy_wallet)`` — one wallet's history."""
+    """``activity(proxy_wallet, max_rows, activity_type)`` — one wallet's history.
+
+    ``activity_type`` is positional rather than optional because it changes what
+    the API returns, not merely what SQL keeps: most of a long-lived wallet's
+    feed is yield accrual, so filtering after the fetch would spend the row
+    budget on entries you did not want. Pass ``''`` for everything.
+    """
 
     proxy_wallet: Annotated[str, Arg(0, doc="Wallet address whose history to read")]
+    max_rows: Annotated[int, Arg(1, doc="Stop after this many entries; 0 fetches the whole history", ge=0)]
     activity_type: Annotated[
         str,
         Arg(
-            "activity_type",
-            doc="Keep only entries of this kind",
-            default="",
+            2,
+            doc="Keep only entries of this kind; empty for all of them",
             # Every value observed across ~19,600 entries from 60 wallets
-            # sampled over three tags — not guessed, and not a small sample:
-            # an earlier 12-wallet pass missed REWARD, CONVERSION and
-            # REFERRAL_REWARD entirely, which is why the live suite asserts
-            # this list against what the API actually emits.
+            # sampled over three tags — not guessed, and not a small sample: an
+            # earlier 12-wallet pass missed REWARD, CONVERSION and
+            # REFERRAL_REWARD entirely, which is why the live suite asserts this
+            # list against what the API actually emits.
             choices=[
                 "",
                 "TRADE",
@@ -958,14 +902,7 @@ class ActivityArgs:
                 "REFERRAL_REWARD",
             ],
         ),
-    ] = ""
-    max_rows: Annotated[
-        int, Arg("max_rows", doc="Stop after this many entries per wallet; 0 fetches all", default=500, ge=0)
-    ] = 500
-    cache_ttl: Annotated[
-        int,
-        Arg("cache_ttl", doc="Seconds to reuse this feed for; 0 turns caching off", default=0, ge=0),
-    ] = 0
+    ]
 
 
 class ActivityFunction(RowTransformFunction[ActivityArgs]):
@@ -1009,7 +946,7 @@ class ActivityFunction(RowTransformFunction[ActivityArgs]):
                 "markets, and this goes wallet to everything it has ever done. All three are "
                 "public because Polymarket settles on a public chain.\n\n"
                 "### Volume\n\n"
-                "An active wallet has a very long history, so `max_rows` defaults to 500."
+                "An active wallet has a very long history, so `max_rows` is required; pass 0 for all of it."
             ),
             example_queries=examples(
                 (
@@ -1017,18 +954,18 @@ class ActivityFunction(RowTransformFunction[ActivityArgs]):
                     "SELECT a.ts, a.activity_type, a.side, a.price, a.size FROM ("
                     "SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets("
                     "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.holders(m.condition_id) h "
+                    "LATERAL polymarket.main.holders(m.condition_id, 20) h "
                     "ORDER BY h.amount DESC LIMIT 1) w, "
-                    "LATERAL polymarket.main.activity(w.proxy_wallet) a ORDER BY a.ts DESC",
+                    "LATERAL polymarket.main.activity(w.proxy_wallet, 500, '') a ORDER BY a.ts DESC",
                 ),
                 (
                     "What kinds of activity a large wallet actually generates",
                     "SELECT a.activity_type, count(*) AS entries FROM ("
                     "SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets("
                     "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.holders(m.condition_id) h "
+                    "LATERAL polymarket.main.holders(m.condition_id, 20) h "
                     "ORDER BY h.amount DESC LIMIT 1) w, "
-                    "LATERAL polymarket.main.activity(w.proxy_wallet) a GROUP BY a.activity_type "
+                    "LATERAL polymarket.main.activity(w.proxy_wallet, 500, '') a GROUP BY a.activity_type "
                     "ORDER BY entries DESC",
                 ),
             ),
@@ -1039,9 +976,9 @@ class ActivityFunction(RowTransformFunction[ActivityArgs]):
                     "SELECT a.activity_type, count(*) AS entries FROM ("
                     "SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets("
                     "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.holders(m.condition_id) h "
+                    "LATERAL polymarket.main.holders(m.condition_id, 20) h "
                     "ORDER BY h.amount DESC LIMIT 1) w, "
-                    "LATERAL polymarket.main.activity(w.proxy_wallet) a GROUP BY a.activity_type "
+                    "LATERAL polymarket.main.activity(w.proxy_wallet, 500, '') a GROUP BY a.activity_type "
                     "ORDER BY entries DESC"
                 ),
                 description="What kinds of activity a large wallet actually generates",
@@ -1061,17 +998,19 @@ class ActivityFunction(RowTransformFunction[ActivityArgs]):
         out: OutputCollector,
     ) -> None:
         wallets = batch.column("proxy_wallet").to_pylist()
+        caps = batch.column("max_rows").to_pylist()
+        kinds = batch.column("activity_type").to_pylist()
         rows: list[dict[str, Any]] = []
         parents: list[int] = []
         hint = CacheHint()
         with api.open_client() as client:
-            for index, wallet in enumerate(wallets):
+            for index, (wallet, cap, kind) in enumerate(zip(wallets, caps, kinds, strict=True)):
                 if wallet is None:
                     continue
                 found = api.activity(
                     str(wallet),
-                    activity_type=params.args.activity_type or None,
-                    limit=params.args.max_rows or None,
+                    activity_type=str(kind) if kind else None,
+                    limit=int(cap) if cap else None,
                     client=client,
                     hint=hint,
                 )
@@ -1082,8 +1021,129 @@ class ActivityFunction(RowTransformFunction[ActivityArgs]):
             params.output_schema,
             rows,
             parents,
-            origin_cache_control(hint) or opt_in_cache_control(params.args.cache_ttl, per_value=True),
+            origin_cache_control(hint),
         )
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class FillArgs:
+    """``fill_price(token_id, side, size)`` — price a request against the book."""
+
+    token_id: Annotated[str, Arg(0, doc="Outcome token the order would trade")]
+    side: Annotated[
+        str,
+        Arg(1, doc="Direction of the order: buy consumes asks, sell consumes bids", choices=["buy", "sell"]),
+    ]
+    size: Annotated[int, Arg(2, doc="Shares the order is for", ge=1)]
+
+
+class FillPriceFunction(RowTransformFunction[FillArgs]):
+    """What a given size would actually cost, having walked the book."""
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = FILL_SCHEMA
+
+    class Meta:
+        name = "fill_price"
+        description = "What a given order size would actually cost after walking the book"
+        categories = ["market-data", "blended"]
+        projection_pushdown = True
+        tags = docs(
+            category="market-depth",
+            result_schema=FILL_SCHEMA,
+            llm=(
+                "The price a given order size would actually get, having consumed the resting "
+                "book level by level. Takes a `token_id`, a side, and a share count. Reach for "
+                "this instead of `quote()` whenever size matters: a market can quote a one-tick "
+                "spread and hold fifteen shares behind it, so the midpoint is a real price at "
+                "which almost nothing trades. `avg_price` is what the position costs per share, "
+                "`slippage` is what the size cost you over the touch, and `fully_filled` says "
+                "whether the book could cover the request at all."
+            ),
+            md=(
+                "One row per request, computed from the same batched book `orderbook()` "
+                "returns — so it costs no extra call when driven alongside it.\n\n"
+                "### Why the touch is not enough\n\n"
+                "Spread measures the distance between the best bid and the best ask. It says "
+                "nothing about how much is standing there. A live market quoted a 0.001 spread "
+                "on 15 shares; another quoted 0.97 on a book with one order a side. Neither "
+                "number tells you what a position would cost, and this does.\n\n"
+                "### Reading the result\n\n"
+                "`avg_price` is size-weighted across every level consumed. `slippage` is the "
+                "distance from the touch, signed so that it is always the cost of size rather "
+                "than a direction — never negative. `fully_filled = false` means the book ran "
+                "out: the row prices the portion that could fill, and the rest of the order "
+                "would move the price further than this reports.\n\n"
+                "### Sizing a strategy\n\n"
+                "Comparing `avg_price` across candidates at the size you actually intend to "
+                "trade is a different ranking from comparing midpoints, and it is the one that "
+                "survives contact with the book."
+            ),
+            example_queries=examples(
+                (
+                    "What 5,000 shares would really cost on the busiest market",
+                    "SELECT f.side, f.avg_price, f.touch_price, f.slippage, f.fully_filled "
+                    "FROM (SELECT o.token_id FROM polymarket.main.markets(closed => 'false', "
+                    "order_by => 'volume24hr', ascending => 'false') m, "
+                    "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, "
+                    "LATERAL polymarket.main.fill_price(t.token_id, 'buy', 5000) f",
+                ),
+                (
+                    "Which outcomes in a topic can absorb real size, and which cannot",
+                    "SELECT m.question, o.outcome, f.avg_price, f.filled_size, f.fully_filled "
+                    "FROM polymarket.main.markets(tag_id => '21', closed => 'false', "
+                    "order_by => 'volume24hr', ascending => 'false') m, "
+                    "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
+                    "LATERAL polymarket.main.fill_price(o.token_id, 'buy', 10000) f "
+                    "WHERE NOT f.fully_filled LIMIT 20",
+                ),
+            ),
+        )
+        examples = [
+            FunctionExample(
+                sql=(
+                    "SELECT f.side, f.avg_price, f.touch_price, f.slippage, f.fully_filled "
+                    "FROM (SELECT o.token_id FROM polymarket.main.markets(closed => 'false', "
+                    "order_by => 'volume24hr', ascending => 'false') m, "
+                    "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, "
+                    "LATERAL polymarket.main.fill_price(t.token_id, 'buy', 5000) f"
+                ),
+                description="What 5,000 shares would really cost on the busiest market",
+            ),
+        ]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[FillArgs]) -> BindResponse:
+        return BindResponse(output_schema=cls.FIXED_SCHEMA)
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[FillArgs],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        tokens = batch.column("token_id").to_pylist()
+        sides = batch.column("side").to_pylist()
+        sizes = batch.column("size").to_pylist()
+        rows: list[dict[str, Any]] = []
+        parents: list[int] = []
+        with api.open_client() as client:
+            # Same batched fetch orderbook() uses: 200 tokens to a request.
+            books = api.books([str(t) for t in tokens if t is not None], client=client)
+            for index, (token_id, side, size) in enumerate(zip(tokens, sides, sizes, strict=True)):
+                if token_id is None or size is None:
+                    continue
+                rows.append(
+                    fill_from_book(
+                        str(token_id),
+                        str(side or "buy").lower(),
+                        size,
+                        books.get(str(token_id)) or {},
+                    )
+                )
+                parents.append(index)
+        emit_fanout(out, params.output_schema, rows, parents, None)
 
 
 TRADING_FUNCTIONS: list[type] = [
@@ -1094,4 +1154,5 @@ TRADING_FUNCTIONS: list[type] = [
     HoldersFunction,
     PositionsFunction,
     ActivityFunction,
+    FillPriceFunction,
 ]

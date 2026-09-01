@@ -370,6 +370,40 @@ ORDERBOOK_SCHEMA = pa.schema(
     ]
 )
 
+#: What a given size would actually cost, having walked the book. The answer the
+#: top-of-book cannot give: a 0.001 spread means nothing if only 15 shares rest
+#: behind it.
+FILL_SCHEMA = pa.schema(
+    [
+        field("token_id", pa.string(), "Outcome token the order would trade."),
+        field("side", pa.string(), "Direction priced: 'buy' consumes asks, 'sell' consumes bids."),
+        field("requested_size", AMOUNT, "Shares asked for."),
+        field("filled_size", AMOUNT, "Shares the resting book could actually supply."),
+        field(
+            "fully_filled",
+            pa.bool_(),
+            "Whether the book covered the whole request. False means the rest of the order "
+            "would move the price further than this row reports.",
+        ),
+        field(
+            "avg_price",
+            PRICE,
+            "Size-weighted average price across every level consumed — what the position "
+            "actually costs per share, as opposed to the touch.",
+        ),
+        field("worst_price", PRICE, "Price of the last level consumed; the far edge of the fill."),
+        field("touch_price", PRICE, "Best price on that side, for comparison with avg_price."),
+        field(
+            "slippage",
+            PRICE,
+            "avg_price minus touch_price for a buy, reversed for a sell. Always the cost of "
+            "size, so never negative.",
+        ),
+        field("levels_consumed", pa.int32(), "How many price levels the order would clear."),
+        field("notional", AMOUNT, "USDC the filled portion would cost or return."),
+    ]
+)
+
 #: Top-of-book for one token, in one row: what markets() carries for its first
 #: outcome, but for any token and fetched live.
 QUOTE_SCHEMA = pa.schema(
@@ -778,6 +812,73 @@ def quote_row(
         "last_trade_price": book.get("last_trade_price"),
         "min_order_size": book.get("min_order_size"),
         "tick_size": book.get("tick_size"),
+    }
+
+
+def fill_from_book(token_id: str, side: str, size: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    """Walk one side of a book and price a request of ``size`` shares.
+
+    This is the number a spread cannot give you. A market can quote a
+    one-tick spread and hold fifteen shares behind it; the touch is then a real
+    price at which almost nothing trades. Consuming levels until the request is
+    met turns "is this liquid?" into "what would it cost me?".
+
+    ``side`` is the direction of the order, so a **buy** consumes asks from the
+    cheapest up and a **sell** consumes bids from the dearest down. A book that
+    cannot cover the request is reported as ``fully_filled = False`` with the
+    portion it can, rather than an average over a fill that would not happen.
+    """
+    wanted = to_decimal(size) or Decimal(0)
+    buying = side == "buy"
+    levels = [
+        (to_decimal(level.get("price")), to_decimal(level.get("size")))
+        for level in (payload.get("asks" if buying else "bids") or [])
+        if isinstance(level, dict)
+    ]
+    usable = [(p, q) for p, q in levels if p is not None and q is not None and q > 0]
+    # Cheapest-first to buy, dearest-first to sell: the order a real sweep takes.
+    usable.sort(key=lambda level: level[0], reverse=not buying)
+
+    remaining, notional, filled, consumed = wanted, Decimal(0), Decimal(0), 0
+    worst: Decimal | None = None
+    for price, available in usable:
+        if remaining <= 0:
+            break
+        take = min(remaining, available)
+        notional += take * price
+        filled += take
+        remaining -= take
+        worst = price
+        consumed += 1
+
+    touch = usable[0][0] if usable else None
+    average = (notional / filled) if filled > 0 else None
+    slip = None
+    if average is not None and touch is not None:
+        slip = (average - touch) if buying else (touch - average)
+    # A size-weighted average is a *derived* quantity, not a quoted one. Dividing
+    # by a share count routinely produces more places than any tick could carry
+    # (0.45666...), and the exact-or-NULL rule that protects quoted prices would
+    # discard it entirely. Rounding here is the correct reading of the same
+    # principle: refuse to invent precision, but do not throw away an answer that
+    # was never going to land on a tick.
+    places = Decimal(1).scaleb(-PRICE.scale)
+    if average is not None:
+        average = average.quantize(places)
+    if slip is not None:
+        slip = slip.quantize(places)
+    return {
+        "token_id": token_id,
+        "side": side,
+        "requested_size": wanted,
+        "filled_size": filled,
+        "fully_filled": filled >= wanted and wanted > 0,
+        "avg_price": average,
+        "worst_price": worst,
+        "touch_price": touch,
+        "slippage": slip,
+        "levels_consumed": consumed,
+        "notional": notional,
     }
 
 
