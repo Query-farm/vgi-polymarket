@@ -594,16 +594,15 @@ keeps it that way.
 pull request, and the live suite on pushes only — a fork's PR should not be able
 to fail on someone else's rate limit.
 
-Pushing a `v*` tag builds, verifies the tag matches `__version__`, and publishes
-to PyPI through Trusted Publishing, so there is no token to store. Both the CI
-and release builds resolve dependencies with `--no-sources`: `[tool.uv.sources]`
-points `vgi-python` and `vgi-rpc` at sibling checkouts that exist only on a
-development machine, and a release has to prove it works against the published
-versions instead.
+Pushing a `v*` tag builds the distributions, refuses a tag that disagrees with
+`__version__`, and keeps the result as a run artifact. It publishes nowhere: the
+package is not on PyPI, and a tag is a checkpoint rather than an irreversible
+act.
 
-PyPI needs one manual step before the first release: add this repository as a
-trusted publisher for the `vgi-polymarket` project, workflow `release.yml`,
-environment `pypi`.
+Both workflows resolve dependencies with `--no-sources`. That is the point of
+them rather than a detail: `[tool.uv.sources]` points `vgi-python` and `vgi-rpc`
+at sibling checkouts that exist only on a development machine, so without the
+flag a release could pass here and be uninstallable everywhere else.
 
 ## License
 
