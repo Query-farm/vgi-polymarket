@@ -35,10 +35,10 @@ from __future__ import annotations
 import os
 import re
 import time
-from urllib.parse import quote as urlquote
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote as urlquote
 
 import httpx
 
@@ -85,6 +85,13 @@ SEARCH_PAGE_LIMIT = 20
 
 #: The Data API's trade tape accepts larger pages and does not appear to clamp.
 DATA_PAGE_LIMIT = 500
+
+#: The Data API refuses deeper offset walks even when more history exists.
+#: Keep the SQL-facing row caps at the last full page before those boundaries,
+#: so a request can always complete instead of failing after returning thousands
+#: of rows internally. Probed against the live API and pinned by live tests.
+TRADES_MAX_ROWS = 10_000
+ACTIVITY_MAX_ROWS = 5_000
 
 #: `/markets/keyset` takes `condition_ids` as a repeated parameter, which turns
 #: a per-row market lookup into one request per this many rows. Verified to 60
@@ -551,6 +558,30 @@ def search_page(
     host — neither the keyset cursor the catalog uses nor the offset the tag and
     series lists use.
     """
+    rows, _ = search_page_with_more(
+        query,
+        page=page,
+        events_status=events_status,
+        client=client,
+        hint=hint,
+    )
+    return rows
+
+
+def search_page_with_more(
+    query: str,
+    *,
+    page: int = 1,
+    events_status: str | None = None,
+    client: httpx.Client | None = None,
+    hint: CacheHint | None = None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """One search page plus Gamma's authoritative continuation signal.
+
+    ``pagination.hasMore`` is deliberately returned rather than inferred from
+    the number of events. Search limits are per result type, and a sparse page
+    is not a protocol-level promise that no later page exists.
+    """
     payload = _get(
         gamma_base_url(),
         "/public-search",
@@ -570,7 +601,14 @@ def search_page(
     )
     if not isinstance(payload, dict):
         raise PolymarketError(200, "/public-search", f"expected an object, got {type(payload).__name__}")
-    return list(payload.get("events") or [])
+    rows = list(payload.get("events") or [])
+    pagination = payload.get("pagination")
+    if isinstance(pagination, dict) and isinstance(pagination.get("hasMore"), bool):
+        has_more = pagination["hasMore"]
+    else:
+        # Conservative compatibility fallback if Gamma ever omits the envelope.
+        has_more = len(rows) >= SEARCH_PAGE_LIMIT
+    return rows, has_more
 
 
 def activity(

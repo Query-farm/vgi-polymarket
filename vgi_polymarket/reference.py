@@ -72,8 +72,10 @@ class AllTagsFunction(TableFunctionGenerator[None, OffsetScanState]):
             example_queries=examples(
                 (
                     "Find the tag id for a topic, read from the scan function",
-                    "SELECT tag_id, label, slug FROM polymarket.main.all_tags() "
-                    "WHERE label ILIKE '%crypto%' ORDER BY label",
+                    (
+                        "SELECT tag_id, label, slug FROM polymarket.main.all_tags() "
+                        "WHERE label ILIKE '%crypto%' ORDER BY label"
+                    ),
                 ),
             ),
         )
@@ -156,9 +158,11 @@ class AllSeriesFunction(TableFunctionGenerator[None, OffsetScanState]):
             example_queries=examples(
                 (
                     "Active recurring series by recent volume, read from the scan function",
-                    "SELECT slug, title, recurrence, volume_24hr "
-                    "FROM polymarket.main.all_series() WHERE active AND NOT closed "
-                    "ORDER BY volume_24hr DESC NULLS LAST LIMIT 20",
+                    (
+                        "SELECT slug, title, recurrence, volume_24hr "
+                        "FROM polymarket.main.all_series() WHERE active AND NOT closed "
+                        "ORDER BY volume_24hr DESC NULLS LAST LIMIT 20"
+                    ),
                 ),
             ),
         )

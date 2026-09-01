@@ -53,6 +53,7 @@ def _run(location: str, sql: str, *, expect_error: bool = False) -> str:
             input=script,
             capture_output=True,
             text=True,
+            check=False,
             timeout=600,
             cwd=ROOT,
         )
@@ -141,18 +142,24 @@ class TestPredicatesAreActuallyApplied:
         [
             (
                 "market slug",
-                "SELECT count(*) FROM (SELECT slug FROM polymarket.main.markets() "
-                "WHERE slug = 'NO-SUCH-SLUG' LIMIT 5);",
+                (
+                    "SELECT count(*) FROM (SELECT slug FROM polymarket.main.markets() "
+                    "WHERE slug = 'NO-SUCH-SLUG' LIMIT 5);"
+                ),
             ),
             (
                 "event slug",
-                "SELECT count(*) FROM (SELECT slug FROM polymarket.main.events() "
-                "WHERE slug = 'NOPE' LIMIT 5);",
+                (
+                    "SELECT count(*) FROM (SELECT slug FROM polymarket.main.events() "
+                    "WHERE slug = 'NOPE' LIMIT 5);"
+                ),
             ),
             (
                 "condition id",
-                "SELECT count(*) FROM (SELECT slug FROM polymarket.main.markets() "
-                "WHERE condition_id = '0xdeadbeef' LIMIT 5);",
+                (
+                    "SELECT count(*) FROM (SELECT slug FROM polymarket.main.markets() "
+                    "WHERE condition_id = '0xdeadbeef' LIMIT 5);"
+                ),
             ),
         ],
     )
@@ -282,6 +289,23 @@ class TestProjectionAndFilterTogether:
             "WHERE question IS NOT NULL LIMIT 3);",
         )
         assert "3" in _lines(out)
+
+
+class TestRequiredPositionalNulls:
+    """A required NULL is NULL-in/empty-out, never an undocumented default."""
+
+    def test_null_arguments_do_not_change_direction_or_remove_limits(self, stdio: str) -> None:
+        out = _run(
+            stdio,
+            "SELECT "
+            "(SELECT count(*) FROM polymarket.main.fill_price('missing', NULL, 100)) = 0 AND "
+            "(SELECT count(*) FROM polymarket.main.price_history('missing', NULL, 60)) = 0 AND "
+            "(SELECT count(*) FROM polymarket.main.trades('missing', NULL, '')) = 0 AND "
+            "(SELECT count(*) FROM polymarket.main.holders('missing', NULL)) = 0 AND "
+            "(SELECT count(*) FROM polymarket.main.positions('missing', NULL)) = 0 AND "
+            "(SELECT count(*) FROM polymarket.main.activity('missing', NULL, '')) = 0;",
+        )
+        assert _is_true(out)
 
 
 class TestHttpTransport:

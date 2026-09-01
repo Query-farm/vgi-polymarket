@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import ClassVar
 
 import pytest
 
 from vgi_polymarket.schemas import (
     AMOUNT,
-    FILL_SCHEMA,
     EVENT_SCHEMA,
+    FILL_SCHEMA,
     MARKET_SCHEMA,
     ORDERBOOK_SCHEMA,
     PRICE,
@@ -66,7 +67,7 @@ class TestFloatsRoundTrip:
 
     def test_the_naive_conversion_would_have_been_wrong(self) -> None:
         """Guard the guard: prove the thing this defends against is real."""
-        assert Decimal(0.955) != Decimal("0.955")
+        assert Decimal(0.955) != Decimal("0.955")  # noqa: RUF032 - proves why float parsing is guarded
         assert to_decimal(0.955) == Decimal("0.955")
 
     def test_booleans_are_not_numbers(self) -> None:
@@ -287,7 +288,7 @@ class TestFillPrice:
     book cannot cover.
     """
 
-    BOOK = {
+    BOOK: ClassVar[dict] = {
         "asks": [
             {"price": "0.46", "size": "500"},
             {"price": "0.45", "size": "100"},

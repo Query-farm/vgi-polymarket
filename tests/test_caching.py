@@ -81,13 +81,11 @@ class TestNoOptInCaching:
     """
 
     def test_no_function_declares_a_cache_ttl_argument(self) -> None:
-        import typing
 
         from vgi_polymarket.worker import _POLYMARKET_CATALOG
 
         offenders = []
         for function in _POLYMARKET_CATALOG.schemas[0].functions:
-            args = getattr(function, "__orig_bases__", None)
             for parameter in function.get_metadata().parameters:
                 if parameter.name == "cache_ttl":
                     offenders.append(function.Meta.name)
@@ -136,9 +134,11 @@ class TestRetry:
             calls["n"] += 1
             return httpx.Response(429, json={"error": "rate limited"})
 
-        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-            with pytest.raises(api.PolymarketError) as excinfo:
-                api.tags_page(client=client)
+        with (
+            httpx.Client(transport=httpx.MockTransport(handler)) as client,
+            pytest.raises(api.PolymarketError) as excinfo,
+        ):
+            api.tags_page(client=client)
         assert excinfo.value.status == 429
         assert calls["n"] == api._RETRY_ATTEMPTS
 
@@ -170,9 +170,11 @@ class TestRetry:
             calls["n"] += 1
             return httpx.Response(400, json={"error": "bad request"})
 
-        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-            with pytest.raises(api.PolymarketError):
-                api.tags_page(client=client)
+        with (
+            httpx.Client(transport=httpx.MockTransport(handler)) as client,
+            pytest.raises(api.PolymarketError),
+        ):
+            api.tags_page(client=client)
         assert calls["n"] == 1
 
     def test_a_404_is_a_distinct_signal(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -182,6 +184,5 @@ class TestRetry:
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(404, json={"error": "No orderbook exists"})
 
-        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-            with pytest.raises(api.NotFound):
-                api.book("nope", client=client)
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client, pytest.raises(api.NotFound):
+            api.book("nope", client=client)

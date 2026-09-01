@@ -88,6 +88,15 @@ class OffsetScanState(ArrowSerializableDataclass):
     done: bool = False
 
 
+@dataclass(kw_only=True)
+class SearchScanState(ArrowSerializableDataclass):
+    """The next 1-based page of search results and whether the scan is done."""
+
+    page: int = 1
+    done: bool = False
+    pages: int = 0
+
+
 def _cache_control(hint: CacheHint) -> CacheControl | None:
     """Translate the origin's own Cache-Control into VGI cache metadata.
 
@@ -174,19 +183,18 @@ def _merge(into: CacheHint, other: CacheHint) -> None:
 
 def emit_search_page(
     params: ProcessParams[Any],
-    state: OffsetScanState,
+    state: SearchScanState,
     out: OutputCollector,
     *,
-    fetch: Callable[..., list[dict[str, Any]]],
+    fetch: Callable[..., tuple[list[dict[str, Any]], bool]],
     shape: Callable[[dict[str, Any]], dict[str, Any]],
-    page_limit: int,
 ) -> None:
     """Fetch one page-numbered search page, and record where to resume.
 
     ``/public-search`` paginates by 1-based page number rather than by offset or
-    cursor — a third style on the same host. ``state.offset`` still counts rows
-    emitted, so the page number is derived from it; that holds because every
-    page but the last is full, and a short page ends the walk anyway.
+    cursor — a third style on the same host. Gamma supplies
+    ``pagination.hasMore``; that signal decides whether to continue, rather than
+    guessing from the number of event rows in a page.
 
     Serial rather than concurrent, unlike the catalog scans: a search is browsed
     with a ``LIMIT``, not walked to the end, so fetching pages ahead would spend
@@ -195,11 +203,13 @@ def emit_search_page(
     if state.done:
         out.finish()
         return
+    if state.pages >= api.MAX_PAGES:
+        raise api.PolymarketPageLimitError("/public-search", state.pages * api.SEARCH_PAGE_LIMIT)
     hint = CacheHint()
-    page = state.offset // page_limit + 1
-    raw = fetch(page=page, hint=hint)
-    state.offset += len(raw)
-    state.done = len(raw) < page_limit
+    raw, has_more = fetch(page=state.page, hint=hint)
+    state.page += 1
+    state.pages += 1
+    state.done = not has_more
     out.emit(
         batch_from_rows([shape(row) for row in raw], params.output_schema),
         cache_control=_cache_control(hint),

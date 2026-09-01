@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 9 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -31,9 +33,11 @@ jobs:
       - name: Format
         run: uv run --no-sources ruff format --check .
 
-      # The offline suite only. The `live` marker is deselected by the addopts
-      # in pyproject.toml: those tests hit Polymarket's public API and would
-      # make CI fail on someone else's outage rather than on this repo's code.
+      - name: Lint
+        run: uv run --no-sources ruff check .
+
+      # The deterministic offline suite. The separate live job below owns
+      # checks against Polymarket's current public API behaviour.
       - name: Tests
         run: uv run --no-sources pytest -q
 
@@ -41,11 +45,10 @@ jobs:
     name: live API tests
     runs-on: ubuntu-latest
     # Not on pull requests: a fork's PR should not be able to fail on, or spend,
-    # someone else's rate limit. Scheduled so the assertions about Polymarket's
+    # someone else's rate limit. Also scheduled so the assertions about Polymarket's
     # own behaviour — page caps, silently ignored filters, the activity types it
     # emits — keep being checked against the real thing rather than a memory.
     if: github.event_name != 'pull_request'
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7

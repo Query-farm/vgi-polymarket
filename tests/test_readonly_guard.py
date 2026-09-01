@@ -35,9 +35,10 @@ def _module(name: str) -> ast.Module:
 def _enclosing_function(tree: ast.Module, node: ast.AST) -> str | None:
     """The name of the function lexically containing ``node``, if any."""
     for candidate in ast.walk(tree):
-        if isinstance(candidate, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if any(inner is node for inner in ast.walk(candidate)):
-                return candidate.name
+        if isinstance(candidate, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
+            inner is node for inner in ast.walk(candidate)
+        ):
+            return candidate.name
     return None
 
 
@@ -46,9 +47,12 @@ class TestNoWriteVerbs:
         offenders: list[str] = []
         for path in PACKAGE.rglob("*.py"):
             for call in ast.walk(ast.parse(path.read_text())):
-                if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute):
-                    if call.func.attr in WRITE_VERBS:
-                        offenders.append(f"{path.name}: .{call.func.attr}()")
+                if (
+                    isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Attribute)
+                    and call.func.attr in WRITE_VERBS
+                ):
+                    offenders.append(f"{path.name}: .{call.func.attr}()")
         assert offenders == [], f"mutating HTTP calls found: {offenders}"
 
     def test_single_http_module(self) -> None:
@@ -119,9 +123,8 @@ class TestPostIsConfined:
         def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
             raise AssertionError(f"a request escaped the guard: {request.url}")
 
-        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-            with pytest.raises(ValueError):
-                api._post_read("/order", [{"x": 1}], client=client)
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client, pytest.raises(ValueError):
+            api._post_read("/order", [{"x": 1}], client=client)
 
 
 class TestPathsCannotBeRetargeted:
@@ -190,4 +193,5 @@ class TestNoCredentialedSurface:
 
     def test_the_check_can_actually_fail(self) -> None:
         """Guard the guard: the scan must be able to see a planted string."""
-        assert "/order" in '"/order"'
+        planted_source = '"/order"'
+        assert "/order" in planted_source

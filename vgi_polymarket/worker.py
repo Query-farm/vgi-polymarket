@@ -48,90 +48,116 @@ _EXAMPLE_QUERIES = examples(
     ),
     (
         "The busiest open markets right now, with their implied probabilities",
-        "SELECT question, outcomes, volume_24hr FROM polymarket.main.markets("
-        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 20",
+        (
+            "SELECT question, outcomes, volume_24hr FROM polymarket.main.markets("
+            "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 20"
+        ),
     ),
     (
         "Every outcome of every crypto market, one row per outcome",
-        f"SELECT m.question, o.outcome, o.price, o.token_id FROM polymarket.main.markets("
-        f"tag_id => '{CRYPTO_TAG}', closed => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o "
-        "ORDER BY m.volume_24hr DESC LIMIT 50",
+        (
+            f"SELECT m.question, o.outcome, o.price, o.token_id FROM polymarket.main.markets("
+            f"tag_id => '{CRYPTO_TAG}', closed => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o "
+            "ORDER BY m.volume_24hr DESC LIMIT 50"
+        ),
     ),
     (
         "Live top-of-book for every outcome in a topic, via LATERAL",
-        f"SELECT m.question, o.outcome, q.midpoint, q.spread FROM polymarket.main.markets("
-        f"tag_id => '{CRYPTO_TAG}', closed => 'false', order_by => 'volume24hr', "
-        "ascending => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
-        "LATERAL polymarket.main.quote(o.token_id) q LIMIT 40",
+        (
+            f"SELECT m.question, o.outcome, q.midpoint, q.spread FROM polymarket.main.markets("
+            f"tag_id => '{CRYPTO_TAG}', closed => 'false', order_by => 'volume24hr', "
+            "ascending => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
+            "LATERAL polymarket.main.quote(o.token_id) q LIMIT 40"
+        ),
     ),
     (
         "Total resting size on each side of a topic's books",
-        f"SELECT b.side, sum(b.size) AS resting FROM polymarket.main.markets("
-        f"tag_id => '{CRYPTO_TAG}', closed => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
-        "LATERAL polymarket.main.orderbook(o.token_id) b GROUP BY b.side",
+        (
+            f"SELECT b.side, sum(b.size) AS resting FROM polymarket.main.markets("
+            f"tag_id => '{CRYPTO_TAG}', closed => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
+            "LATERAL polymarket.main.orderbook(o.token_id) b GROUP BY b.side"
+        ),
     ),
     (
         "A week of hourly implied probability for the busiest open market",
-        "SELECT h.ts, h.price FROM (SELECT o.token_id FROM polymarket.main.markets("
-        "closed => 'false', order_by => 'volume24hr', ascending => 'false') m, "
-        "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, "
-        "LATERAL polymarket.main.price_history(t.token_id, '1w', 60) h "
-        "ORDER BY h.ts",
+        (
+            "SELECT h.ts, h.price FROM (SELECT o.token_id FROM polymarket.main.markets("
+            "closed => 'false', order_by => 'volume24hr', ascending => 'false') m, "
+            "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, "
+            "LATERAL polymarket.main.price_history(t.token_id, '1w', 60) h "
+            "ORDER BY h.ts"
+        ),
     ),
     (
         "The most recent prints on the busiest open market, with who traded",
-        "SELECT t.ts, t.side, t.outcome, t.price, t.size, t.trader_name FROM ("
-        "SELECT condition_id FROM polymarket.main.markets("
-        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-        "LATERAL polymarket.main.trades(m.condition_id, 100, '') t ORDER BY t.ts DESC",
+        (
+            "SELECT t.ts, t.side, t.outcome, t.price, t.size, t.trader_name FROM ("
+            "SELECT condition_id FROM polymarket.main.markets("
+            "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
+            "LATERAL polymarket.main.trades(m.condition_id, 100, '') t ORDER BY t.ts DESC"
+        ),
     ),
     (
         "Who holds the biggest positions in the busiest open market",
-        "SELECT h.outcome_index, h.holder_name, h.amount FROM ("
-        "SELECT condition_id FROM polymarket.main.markets("
-        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-        "LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC",
+        (
+            "SELECT h.outcome_index, h.holder_name, h.amount FROM ("
+            "SELECT condition_id FROM polymarket.main.markets("
+            "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
+            "LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC"
+        ),
     ),
     (
         "Follow the biggest holder in a busy market to everything else they hold",
-        "SELECT p.title, p.outcome, p.size, p.cash_pnl FROM (SELECT h.proxy_wallet FROM ("
-        "SELECT condition_id FROM polymarket.main.markets(closed => 'false', "
-        "order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-        "LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC LIMIT 1) w, "
-        "LATERAL polymarket.main.positions(w.proxy_wallet, 100) p ORDER BY p.current_value DESC",
+        (
+            "SELECT p.title, p.outcome, p.size, p.cash_pnl FROM (SELECT h.proxy_wallet FROM ("
+            "SELECT condition_id FROM polymarket.main.markets(closed => 'false', "
+            "order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
+            "LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC LIMIT 1) w, "
+            "LATERAL polymarket.main.positions(w.proxy_wallet, 100) p ORDER BY p.current_value DESC"
+        ),
     ),
     (
         "The biggest open events, and the markets under one of them",
-        "SELECT m.question, m.volume_24hr FROM (SELECT event_id FROM polymarket.main.events("
-        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) e, "
-        "LATERAL polymarket.main.event_markets(e.event_id) m ORDER BY m.volume_24hr DESC NULLS LAST",
+        (
+            "SELECT m.question, m.volume_24hr FROM (SELECT event_id FROM polymarket.main.events("
+            "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) e, "
+            "LATERAL polymarket.main.event_markets(e.event_id) m ORDER BY m.volume_24hr DESC NULLS LAST"
+        ),
     ),
     (
         "Find events by subject, then the markets under the best match",
-        "SELECT m.question, m.outcomes FROM (SELECT event_id FROM "
-        "polymarket.main.search('bitcoin') LIMIT 1) e, "
-        "LATERAL polymarket.main.event_markets(e.event_id) m",
+        (
+            "SELECT m.question, m.outcomes FROM (SELECT event_id FROM "
+            "polymarket.main.search('bitcoin') LIMIT 1) e, "
+            "LATERAL polymarket.main.event_markets(e.event_id) m"
+        ),
     ),
     (
         "How the biggest holder in a busy market built their position",
-        "SELECT a.ts, a.activity_type, a.side, a.price, a.size FROM (SELECT h.proxy_wallet FROM ("
-        "SELECT condition_id FROM polymarket.main.markets(closed => 'false', "
-        "order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-        "LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC LIMIT 1) w, "
-        "LATERAL polymarket.main.activity(w.proxy_wallet, 500, '') a ORDER BY a.ts DESC",
+        (
+            "SELECT a.ts, a.activity_type, a.side, a.price, a.size FROM (SELECT h.proxy_wallet FROM ("
+            "SELECT condition_id FROM polymarket.main.markets(closed => 'false', "
+            "order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
+            "LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC LIMIT 1) w, "
+            "LATERAL polymarket.main.activity(w.proxy_wallet, 500, '') a ORDER BY a.ts DESC"
+        ),
     ),
     (
-        "What 5,000 shares would really cost, against what the touch advertises",
-        "SELECT m.question, o.outcome, q.midpoint, f.avg_price, f.slippage, f.fully_filled "
-        "FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', "
-        "ascending => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
-        "LATERAL polymarket.main.quote(o.token_id) q, "
-        "LATERAL polymarket.main.fill_price(o.token_id, 'buy', 5000) f LIMIT 20",
+        "Pre-fee displayed-book cost of 5,000 shares, against what the touch advertises",
+        (
+            "SELECT m.question, o.outcome, q.midpoint, f.avg_price, f.slippage, f.fully_filled "
+            "FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', "
+            "ascending => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
+            "LATERAL polymarket.main.quote(o.token_id) q, "
+            "LATERAL polymarket.main.fill_price(o.token_id, 'buy', 5000) f LIMIT 20"
+        ),
     ),
     (
         "Active recurring series by recent volume",
-        "SELECT slug, title, recurrence, volume_24hr FROM polymarket.main.series "
-        "WHERE active AND NOT closed ORDER BY volume_24hr DESC NULLS LAST LIMIT 20",
+        (
+            "SELECT slug, title, recurrence, volume_24hr FROM polymarket.main.series "
+            "WHERE active AND NOT closed ORDER BY volume_24hr DESC NULLS LAST LIMIT 20"
+        ),
     ),
     (
         "Topics read from the scan function behind the tags table",
@@ -143,15 +169,19 @@ _EXAMPLE_QUERIES = examples(
     ),
     (
         "The event behind the busiest open market",
-        "SELECT e.title, e.volume_24hr, e.end_date FROM (SELECT event_id FROM "
-        "polymarket.main.markets(closed => 'false', order_by => 'volume24hr', "
-        "ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.event(m.event_id) e",
+        (
+            "SELECT e.title, e.volume_24hr, e.end_date FROM (SELECT event_id FROM "
+            "polymarket.main.markets(closed => 'false', order_by => 'volume24hr', "
+            "ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.event(m.event_id) e"
+        ),
     ),
     (
         "The question behind a market, by its on-chain id",
-        "SELECT m.question, m.volume_24hr FROM (SELECT condition_id FROM polymarket.main.markets("
-        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) t, "
-        "LATERAL polymarket.main.market(t.condition_id) m",
+        (
+            "SELECT m.question, m.volume_24hr FROM (SELECT condition_id FROM polymarket.main.markets("
+            "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) t, "
+            "LATERAL polymarket.main.market(t.condition_id) m"
+        ),
     ),
 )
 
@@ -521,8 +551,8 @@ _AGENT_TEST_TASKS = json.dumps(
         {
             "name": "what_size_actually_costs",
             "prompt": (
-                "The spread on a Polymarket outcome looks tight. What would 5,000 shares "
-                "actually cost me, and would the book even fill it?"
+                "The spread on a Polymarket outcome looks tight. What is the pre-fee "
+                "displayed-book cost of 5,000 shares, and would the book even fill it?"
             ),
             "check_sql": (
                 "SELECT bool_and(f.slippage >= 0) IS NOT FALSE FROM ("
@@ -533,8 +563,8 @@ _AGENT_TEST_TASKS = json.dumps(
             ),
             "success_criteria": (
                 "Uses fill_price() rather than reading the spread from quote(). A tight spread "
-                "says nothing about the size behind it, and avg_price is what a position "
-                "actually costs."
+                "says nothing about the size behind it; avg_price is the pre-fee price implied "
+                "by displayed liquidity."
             ),
             "unordered": True,
         },
@@ -692,9 +722,8 @@ _CATALOG_TAGS = {
         "### Rate limits and cost\n\n"
         "Order books are the expensive thing — about 147 ms each — so they are fetched in "
         "batches of up to 200 outcomes per request, measured ~81x faster than one at a time. "
-        "Everything else runs at roughly 20 requests a second without throttling. The per-row "
-        "functions take a `cache_ttl` argument that turns repeated lookups into cache hits when "
-        "a few seconds of staleness is acceptable."
+        "Everything else runs at roughly 20 requests a second without throttling. Origin cache "
+        "directives are forwarded; live book and quote endpoints declare none and stay uncached."
     ),
 }
 
@@ -771,13 +800,17 @@ _TAGS_DOCS = docs(
     example_queries=examples(
         (
             "Find the tag id for a topic",
-            "SELECT tag_id, label, slug FROM polymarket.main.tags "
-            "WHERE label ILIKE '%crypto%' ORDER BY label",
+            (
+                "SELECT tag_id, label, slug FROM polymarket.main.tags "
+                "WHERE label ILIKE '%crypto%' ORDER BY label"
+            ),
         ),
         (
             "Topics whose tags were published most recently",
-            "SELECT label, slug, published_at FROM polymarket.main.tags "
-            "WHERE published_at IS NOT NULL ORDER BY published_at DESC LIMIT 20",
+            (
+                "SELECT label, slug, published_at FROM polymarket.main.tags "
+                "WHERE published_at IS NOT NULL ORDER BY published_at DESC LIMIT 20"
+            ),
         ),
     ),
     extra={
@@ -810,13 +843,17 @@ _SERIES_DOCS = docs(
     example_queries=examples(
         (
             "Active recurring series by recent volume",
-            "SELECT slug, title, recurrence, volume_24hr FROM polymarket.main.series "
-            "WHERE active AND NOT closed ORDER BY volume_24hr DESC NULLS LAST LIMIT 20",
+            (
+                "SELECT slug, title, recurrence, volume_24hr FROM polymarket.main.series "
+                "WHERE active AND NOT closed ORDER BY volume_24hr DESC NULLS LAST LIMIT 20"
+            ),
         ),
         (
             "How many series run at each cadence",
-            "SELECT recurrence, count(*) AS series_count FROM polymarket.main.series "
-            "GROUP BY recurrence ORDER BY series_count DESC",
+            (
+                "SELECT recurrence, count(*) AS series_count FROM polymarket.main.series "
+                "GROUP BY recurrence ORDER BY series_count DESC"
+            ),
         ),
     ),
     extra={

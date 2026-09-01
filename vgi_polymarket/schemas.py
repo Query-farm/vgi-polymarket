@@ -168,7 +168,7 @@ def to_timestamp(value: Any) -> datetime | None:
         except (ValueError, OverflowError, OSError):
             return None
     try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(str(value))
     except (ValueError, OverflowError):
         return None
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
@@ -370,9 +370,8 @@ ORDERBOOK_SCHEMA = pa.schema(
     ]
 )
 
-#: What a given size would actually cost, having walked the book. The answer the
-#: top-of-book cannot give: a 0.001 spread means nothing if only 15 shares rest
-#: behind it.
+#: Pre-fee displayed-book price for a given size. The answer the top-of-book
+#: cannot give: a 0.001 spread means nothing if only 15 shares rest behind it.
 FILL_SCHEMA = pa.schema(
     [
         field("token_id", pa.string(), "Outcome token the order would trade."),
@@ -388,8 +387,8 @@ FILL_SCHEMA = pa.schema(
         field(
             "avg_price",
             PRICE,
-            "Size-weighted average price across every level consumed — what the position "
-            "actually costs per share, as opposed to the touch.",
+            "Size-weighted average price across every level consumed, before any applicable "
+            "venue fees — the displayed-book fill price rather than the touch.",
         ),
         field("worst_price", PRICE, "Price of the last level consumed; the far edge of the fill."),
         field("touch_price", PRICE, "Best price on that side, for comparison with avg_price."),
@@ -400,7 +399,7 @@ FILL_SCHEMA = pa.schema(
             "size, so never negative.",
         ),
         field("levels_consumed", pa.int32(), "How many price levels the order would clear."),
-        field("notional", AMOUNT, "USDC the filled portion would cost or return."),
+        field("notional", AMOUNT, "Pre-fee USDC notional of the filled portion."),
     ]
 )
 
@@ -821,12 +820,14 @@ def fill_from_book(token_id: str, side: str, size: Any, payload: dict[str, Any])
     This is the number a spread cannot give you. A market can quote a
     one-tick spread and hold fifteen shares behind it; the touch is then a real
     price at which almost nothing trades. Consuming levels until the request is
-    met turns "is this liquid?" into "what would it cost me?".
+    met turns "is this liquid?" into "what is the displayed-book notional?".
 
     ``side`` is the direction of the order, so a **buy** consumes asks from the
     cheapest up and a **sell** consumes bids from the dearest down. A book that
     cannot cover the request is reported as ``fully_filled = False`` with the
     portion it can, rather than an average over a fill that would not happen.
+    Fees are deliberately outside this calculation; every output is derived
+    solely from the displayed levels in ``payload``.
     """
     wanted = to_decimal(size) or Decimal(0)
     buying = side == "buy"
@@ -872,7 +873,7 @@ def fill_from_book(token_id: str, side: str, size: Any, payload: dict[str, Any])
         "side": side,
         "requested_size": wanted,
         "filled_size": filled,
-        "fully_filled": filled >= wanted and wanted > 0,
+        "fully_filled": filled >= wanted > 0,
         "avg_price": average,
         "worst_price": worst,
         "touch_price": touch,

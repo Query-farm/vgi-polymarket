@@ -53,7 +53,7 @@ from vgi_polymarket import polymarket_api as api
 from vgi_polymarket.meta import docs, examples
 from vgi_polymarket.paging import (
     KeysetScanState,
-    OffsetScanState,
+    SearchScanState,
     emit_keyset_page,
     emit_search_page,
 )
@@ -291,14 +291,18 @@ MARKETS_DOCS = docs(
     example_queries=examples(
         (
             "The busiest open markets right now, with their implied probabilities",
-            "SELECT question, outcomes, volume_24hr FROM polymarket.main.markets("
-            "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 20",
+            (
+                "SELECT question, outcomes, volume_24hr FROM polymarket.main.markets("
+                "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 20"
+            ),
         ),
         (
             "Every outcome of every crypto market, one row per outcome",
-            "SELECT m.question, o.outcome, o.price, o.token_id "
-            "FROM polymarket.main.markets(tag_id => '21', closed => 'false') m, "
-            "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o ORDER BY m.volume_24hr DESC LIMIT 50",
+            (
+                "SELECT m.question, o.outcome, o.price, o.token_id "
+                "FROM polymarket.main.markets(tag_id => '21', closed => 'false') m, "
+                "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o ORDER BY m.volume_24hr DESC LIMIT 50"
+            ),
         ),
     ),
 )
@@ -424,18 +428,22 @@ class MarketFunction(RowTransformFunction[ConditionIdArgs]):
             example_queries=examples(
                 (
                     "The question behind the busiest open market",
-                    "SELECT m.question, m.volume_24hr FROM ("
-                    "SELECT condition_id FROM polymarket.main.markets("
-                    "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) t, "
-                    "LATERAL polymarket.main.market(t.condition_id) m",
+                    (
+                        "SELECT m.question, m.volume_24hr FROM ("
+                        "SELECT condition_id FROM polymarket.main.markets("
+                        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) t, "
+                        "LATERAL polymarket.main.market(t.condition_id) m"
+                    ),
                 ),
                 (
                     "Join a market's trade tape back to its question",
-                    "SELECT m.question, count(*) AS prints FROM ("
-                    "SELECT condition_id FROM polymarket.main.markets("
-                    "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 3) s, "
-                    "LATERAL polymarket.main.market(s.condition_id) m, "
-                    "LATERAL polymarket.main.trades(s.condition_id, 100, '') t GROUP BY m.question",
+                    (
+                        "SELECT m.question, count(*) AS prints FROM ("
+                        "SELECT condition_id FROM polymarket.main.markets("
+                        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 3) s, "
+                        "LATERAL polymarket.main.market(s.condition_id) m, "
+                        "LATERAL polymarket.main.trades(s.condition_id, 100, '') t GROUP BY m.question"
+                    ),
                 ),
             ),
         )
@@ -595,13 +603,17 @@ EVENTS_DOCS = docs(
     example_queries=examples(
         (
             "The biggest open events by 24-hour volume",
-            "SELECT slug, title, volume_24hr, liquidity FROM polymarket.main.events("
-            "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 20",
+            (
+                "SELECT slug, title, volume_24hr, liquidity FROM polymarket.main.events("
+                "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 20"
+            ),
         ),
         (
             "Which topics an event is filed under, one row per tag",
-            "SELECT e.title, (unnest(e.tags)).label AS topic FROM polymarket.main.events("
-            "closed => 'false', order_by => 'volume24hr', ascending => 'false') e LIMIT 40",
+            (
+                "SELECT e.title, (unnest(e.tags)).label AS topic FROM polymarket.main.events("
+                "closed => 'false', order_by => 'volume24hr', ascending => 'false') e LIMIT 40"
+            ),
         ),
     ),
 )
@@ -711,18 +723,22 @@ class EventFunction(RowTransformFunction[EventIdArgs]):
             example_queries=examples(
                 (
                     "The event behind the busiest open market",
-                    "SELECT e.title, e.volume_24hr, e.end_date FROM ("
-                    "SELECT event_id FROM polymarket.main.markets("
-                    "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.event(m.event_id) e",
+                    (
+                        "SELECT e.title, e.volume_24hr, e.end_date FROM ("
+                        "SELECT event_id FROM polymarket.main.markets("
+                        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
+                        "LATERAL polymarket.main.event(m.event_id) e"
+                    ),
                 ),
                 (
                     "Open interest of the events behind the busiest markets",
-                    "SELECT DISTINCT e.title, e.open_interest FROM ("
-                    "SELECT event_id FROM polymarket.main.markets("
-                    "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 5) m, "
-                    "LATERAL polymarket.main.event(m.event_id) e "
-                    "ORDER BY e.open_interest DESC NULLS LAST",
+                    (
+                        "SELECT DISTINCT e.title, e.open_interest FROM ("
+                        "SELECT event_id FROM polymarket.main.markets("
+                        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 5) m, "
+                        "LATERAL polymarket.main.event(m.event_id) e "
+                        "ORDER BY e.open_interest DESC NULLS LAST"
+                    ),
                 ),
             ),
         )
@@ -828,19 +844,23 @@ class EventMarketsFunction(RowTransformFunction[EventIdArgs]):
             example_queries=examples(
                 (
                     "Every candidate market under the biggest open event",
-                    "SELECT m.question, m.outcomes, m.volume_24hr FROM ("
-                    "SELECT event_id FROM polymarket.main.events("
-                    "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) e, "
-                    "LATERAL polymarket.main.event_markets(e.event_id) m "
-                    "ORDER BY m.volume_24hr DESC NULLS LAST",
+                    (
+                        "SELECT m.question, m.outcomes, m.volume_24hr FROM ("
+                        "SELECT event_id FROM polymarket.main.events("
+                        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) e, "
+                        "LATERAL polymarket.main.event_markets(e.event_id) m "
+                        "ORDER BY m.volume_24hr DESC NULLS LAST"
+                    ),
                 ),
                 (
                     "How many markets each of the busiest events carries",
-                    "SELECT e.title, count(*) AS markets FROM ("
-                    "SELECT event_id, title FROM polymarket.main.events("
-                    "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 5) e, "
-                    "LATERAL polymarket.main.event_markets(e.event_id) m GROUP BY e.title "
-                    "ORDER BY markets DESC",
+                    (
+                        "SELECT e.title, count(*) AS markets FROM ("
+                        "SELECT event_id, title FROM polymarket.main.events("
+                        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 5) e, "
+                        "LATERAL polymarket.main.event_markets(e.event_id) m GROUP BY e.title "
+                        "ORDER BY markets DESC"
+                    ),
                 ),
             ),
         )
@@ -919,7 +939,7 @@ class SearchArgs:
 
 
 @init_single_worker
-class SearchFunction(TableFunctionGenerator[SearchArgs, OffsetScanState]):
+class SearchFunction(TableFunctionGenerator[SearchArgs, SearchScanState]):
     """Full-text search over events — the only text search Polymarket offers.
 
     Without this, finding "the Bitcoin markets" means scanning the whole catalog
@@ -972,9 +992,11 @@ class SearchFunction(TableFunctionGenerator[SearchArgs, OffsetScanState]):
                 ),
                 (
                     "Search for a subject, then the tradeable markets under the best match",
-                    "SELECT m.question, m.outcomes FROM (SELECT event_id FROM "
-                    "polymarket.main.search('federal reserve') LIMIT 1) e, "
-                    "LATERAL polymarket.main.event_markets(e.event_id) m",
+                    (
+                        "SELECT m.question, m.outcomes FROM (SELECT event_id FROM "
+                        "polymarket.main.search('federal reserve') LIMIT 1) e, "
+                        "LATERAL polymarket.main.event_markets(e.event_id) m"
+                    ),
                 ),
             ),
         )
@@ -990,20 +1012,20 @@ class SearchFunction(TableFunctionGenerator[SearchArgs, OffsetScanState]):
         return BindResponse(output_schema=cls.FIXED_SCHEMA)
 
     @classmethod
-    def initial_state(cls, params: ProcessParams[SearchArgs]) -> OffsetScanState:
-        return OffsetScanState()
+    def initial_state(cls, params: ProcessParams[SearchArgs]) -> SearchScanState:
+        return SearchScanState()
 
     @classmethod
     def process(
         cls,
         params: ProcessParams[SearchArgs],
-        state: OffsetScanState,
+        state: SearchScanState,
         out: OutputCollector,
     ) -> None:
         """Emit one page of search results, then remember where to resume."""
 
-        def fetch(*, page: int, hint: CacheHint) -> list[dict[str, Any]]:
-            return api.search_page(
+        def fetch(*, page: int, hint: CacheHint) -> tuple[list[dict[str, Any]], bool]:
+            return api.search_page_with_more(
                 params.args.query,
                 page=page,
                 events_status=params.args.events_status or None,
@@ -1016,7 +1038,6 @@ class SearchFunction(TableFunctionGenerator[SearchArgs, OffsetScanState]):
             out,
             fetch=fetch,
             shape=event_row,
-            page_limit=api.SEARCH_PAGE_LIMIT,
         )
 
 

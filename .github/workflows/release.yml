@@ -27,6 +27,7 @@ jobs:
         run: |
           uv sync --no-sources --group dev
           uv run --no-sources ruff format --check .
+          uv run --no-sources ruff check .
           uv run --no-sources pytest -q
 
       - name: Build

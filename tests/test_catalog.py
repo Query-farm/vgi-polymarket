@@ -95,10 +95,18 @@ class TestPagedScans:
     def test_table_scans_carry_offset_state(self) -> None:
         from vgi_polymarket.paging import OffsetScanState
 
-        for func in [*TABLE_SCANS, *SEARCH_SCANS]:
+        for func in TABLE_SCANS:
             state = func.initial_state(None)  # type: ignore[arg-type]
             assert isinstance(state, OffsetScanState), func.Meta.name
             assert state.offset == 0 and state.done is False, func.Meta.name
+
+    def test_search_scans_carry_page_state(self) -> None:
+        from vgi_polymarket.paging import SearchScanState
+
+        for func in SEARCH_SCANS:
+            state = func.initial_state(None)  # type: ignore[arg-type]
+            assert isinstance(state, SearchScanState), func.Meta.name
+            assert state.page == 1 and state.done is False, func.Meta.name
 
     def test_every_function_is_classified(self) -> None:
         """Neither list can silently rot as functions are added."""
@@ -247,6 +255,21 @@ class TestEveryArgumentIsReachable:
                 continue
             period = next(p for p in function.get_metadata().parameters if p.name == "period")
             assert period.constraints and "1w" in period.constraints["choices"]
+
+    def test_history_caps_match_the_data_api_boundaries(self) -> None:
+        from vgi_polymarket import polymarket_api as api
+
+        expected = {
+            "trades": api.TRADES_MAX_ROWS,
+            "activity": api.ACTIVITY_MAX_ROWS,
+        }
+        for function in _POLYMARKET_CATALOG.schemas[0].functions:
+            maximum = expected.get(function.Meta.name)
+            if maximum is None:
+                continue
+            cap = next(p for p in function.get_metadata().parameters if p.name == "max_rows")
+            assert cap.constraints and cap.constraints["le"] == maximum
+            assert cap.constraints["ge"] == 1
 
 
 class TestCatalogShape:
@@ -457,14 +480,12 @@ class TestShippedExamples:
             Binder Error: No function matches the given name and argument types
             'trades(VARCHAR, INTEGER)'
             Candidate functions:
-            trades(VARCHAR, max_rows : BIGINT, side : VARCHAR, cache_ttl : BIGINT)
+            trades(VARCHAR, max_rows : BIGINT, side : VARCHAR)
 
-        The arguments therefore stay declared — their defaults are what every
-        call actually gets, and they will work unchanged once the binder catches
-        up — but nothing this worker *advertises* may depend on them, or the
-        example does not run. Scans are unaffected: `markets(closed => 'false')`
-        binds fine, because a TableFunctionGenerator is an ordinary table
-        function.
+        The worker therefore exposes every blended-function option as a
+        required positional argument, and nothing it advertises may depend on
+        named syntax. Scans are unaffected: `markets(closed => 'false')` binds
+        fine, because a TableFunctionGenerator is an ordinary table function.
         """
         blended = {f.Meta.name for f in BLENDED}
         offenders: list[tuple[str, str]] = []

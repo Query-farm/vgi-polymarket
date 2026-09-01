@@ -161,10 +161,10 @@ because a scan blocked inside its first batch cannot be cancelled, the query
 | `quote(token_id)` | — |
 | `fill_price(token_id, side, size)` | `side` is `buy`/`sell`; `size` in shares |
 | `price_history(token_id, period, fidelity)` | period is `1h`/`6h`/`1d`/`1w`/`1m`/`max`; fidelity in minutes |
-| `trades(condition_id, max_rows, side)` | `max_rows` 0 for all; `side` `''` for both |
+| `trades(condition_id, max_rows, side)` | `max_rows` 1–10,000; `side` `''` for both |
 | `holders(condition_id, max_rows)` | max_rows per outcome |
 | `positions(proxy_wallet, max_rows)` | `max_rows` 0 for all |
-| `activity(proxy_wallet, max_rows, activity_type)` | `activity_type` `''` for every kind |
+| `activity(proxy_wallet, max_rows, activity_type)` | `max_rows` 1–5,000; `activity_type` `''` for every kind |
 
 ### Every argument is one you can actually pass
 
@@ -181,12 +181,22 @@ and where it does not, it is gone. `depth` on `orderbook()` went because the
 batched endpoint returns the whole book regardless and SQL caps it exactly:
 
 ```sql
-QUALIFY row_number() OVER (PARTITION BY side ORDER BY price DESC) <= 5
+QUALIFY row_number() OVER (
+    PARTITION BY side
+    ORDER BY CASE WHEN side = 'bid' THEN -price ELSE price END
+) <= 5
 ```
+
+The ordering must change by side: the best bid is the highest price, while the
+best ask is the lowest.
 
 `cache_ttl` went with it. It only ever governed the two CLOB endpoints that
 declare no freshness, and those are already batched 200-to-a-request; everything
 else runs on Polymarket's own declared TTLs, forwarded rather than invented.
+
+The Data API also imposes hard history boundaries: trade offsets above 10,000
+and activity offsets above 5,000 are rejected. Those functions therefore expose
+bounded `max_rows` ranges instead of a `0 means all` value that eventually fails.
 
 ### Why there is no `markets(event_slug => …)`
 
@@ -384,8 +394,8 @@ declare.
 
 ## What a price costs at size
 
-`quote()` gives the touch. `fill_price(token_id, side, size)` walks the book and
-tells you what a position would actually cost:
+`quote()` gives the touch. `fill_price(token_id, side, size)` walks the displayed
+book and reports the pre-fee fill price and notional:
 
 ```sql
 SELECT o.outcome, q.midpoint, f.avg_price, f.slippage, f.fully_filled
@@ -408,7 +418,8 @@ cannot come out negative. `fully_filled = false` means the book ran out: the row
 prices the portion that could fill, and the rest of the order would move the
 price further than it reports. It reuses the same batched book fetch
 `orderbook()` uses, so driving both from one query costs one round trip per 200
-tokens.
+tokens. `avg_price` and `notional` exclude any applicable venue fees; this is a
+displayed-liquidity model, not a fee calculator.
 
 ## Caching
 
@@ -423,7 +434,7 @@ so if Polymarket changes a TTL, this follows automatically.
 | `/trades`, `/holders` | `public, max-age=300` | `ttl=300` |
 | `/positions`, `/activity` | `public, max-age=5` | `ttl=5` |
 | `/prices-history` | `public, max-age=90` | `ttl=90` |
-| `/book`, `/midpoints`, `/prices` | *(nothing)* | uncached unless `cache_ttl` |
+| `/book`, `/midpoints`, `/prices` | *(nothing)* | uncached |
 
 A response counts as cacheable only if it declares a non-zero `max-age` *and*
 declares nothing that forbids reuse. `no-store`, `no-cache` and `private` beat
@@ -436,17 +447,10 @@ Polymarket sends **no `ETag` and no `Last-Modified`** on anything, so a cached
 result can only expire — it can never be cheaply revalidated. Every cacheable
 result carries `stale_if_error=300`.
 
-**Price history is cached by immutability where it can be.** A sampled point can
-never change once its bar has closed, so an explicit window ending in the past
-is cached for a day. A window running up to `now` contains a point that is still
-moving and takes the origin's 90 seconds instead.
-
-**Opt-in caching for live data.** `orderbook()`, `quote()`, `market()`,
-`event()`, `event_markets()`, `trades()` and `holders()` declare a `cache_ttl`
-argument, default `0` (off), which would also enable `per_value` memoization.
-It is not reachable from SQL today — see the note on named arguments above — so
-the live endpoints are simply uncached, and the catalog endpoints run on
-Polymarket's own declared TTLs, which is the safe default either way.
+Every `price_history()` window ends at the present, so its last sampled point may
+still be forming and the origin's 90-second lifetime applies. The live book and
+quote endpoints declare no cacheability and expose no cache override; they stay
+uncached. Catalog and Data API results follow the origin TTLs shown above.
 
 ## Performance
 

@@ -70,6 +70,10 @@ vgi-rpc = { path = "../vgi-rpc" }
 line-length = 110
 target-version = "py313"
 
+[tool.ruff.lint.per-file-ignores]
+# VGI discovers these SDK metadata declarations as class attributes.
+"vgi_polymarket/{markets,reference,trading}.py" = ["RUF012"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Live tests hit the public Polymarket API; opt in with `pytest -m live`.

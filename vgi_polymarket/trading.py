@@ -1,6 +1,6 @@
-"""Live trading data: order books, quotes, price history, trades, holders.
+"""Live trading data: books, quotes, fills, history, trades and positions.
 
-All five are **blended** (:class:`~vgi.table_in_out_function.RowTransformFunction`)
+All functions here are **blended** (:class:`~vgi.table_in_out_function.RowTransformFunction`)
 table functions, because each one's fetch is bounded by construction — one
 token's book, one token's price curve, one market's tape. That is what lets a
 single registration serve both a literal call and a correlated LATERAL::
@@ -15,10 +15,12 @@ single registration serve both a literal call and a correlated LATERAL::
 **Which identifier goes where** is the thing to get right, and it splits exactly
 along the host boundary:
 
-* The CLOB (:func:`orderbook`, :func:`quote`, :func:`price_history`) keys on a
+* The CLOB (:func:`orderbook`, :func:`quote`, :func:`fill_price`,
+  :func:`price_history`) keys on a
   **token id** — one outcome.
-* The Data API (:func:`trades`, :func:`holders`) keys on a **condition id** —
-  the whole market.
+* The Data API's :func:`trades` and :func:`holders` key on a **condition id** —
+  the whole market — while :func:`positions` and :func:`activity` key on a
+  proxy-wallet address.
 
 Polymarket calls the query parameter ``market`` in both places. Passing a
 condition id to ``price_history`` is answered with HTTP 200 and an empty series;
@@ -29,13 +31,11 @@ column comments repeat it.
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from typing import Annotated, Any, ClassVar
 
 import pyarrow as pa
 from vgi.arguments import Arg
-from vgi.cache_control import CacheControl
 from vgi.invocation import BindResponse
 from vgi.metadata import FunctionExample
 from vgi.table_function import BindParams, ProcessParams
@@ -45,7 +45,7 @@ from vgi_rpc.rpc import OutputCollector
 from vgi_polymarket import polymarket_api as api
 from vgi_polymarket.markets import emit_fanout, origin_cache_control
 from vgi_polymarket.meta import docs, examples
-from vgi_polymarket.polymarket_api import STALE_IF_ERROR, CacheHint, NotFound
+from vgi_polymarket.polymarket_api import CacheHint, NotFound
 from vgi_polymarket.schemas import (
     ACTIVITY_SCHEMA,
     FILL_SCHEMA,
@@ -82,7 +82,8 @@ class OrderbookArgs:
     applied here — and SQL already expresses it exactly, without a knob:
 
         QUALIFY row_number() OVER (
-            PARTITION BY side ORDER BY price DESC
+            PARTITION BY side
+            ORDER BY CASE WHEN side = 'bid' THEN -price ELSE price END
         ) <= 5
 
     An argument that does no work the query language cannot is surface to
@@ -126,7 +127,8 @@ class OrderbookFunction(RowTransformFunction[OrderbookArgs]):
                 "market mirror each other: a Yes bid at 0.40 is economically a No ask at 0.60. "
                 "There is no `depth` argument: the batched endpoint returns the whole book "
                 "either way, and SQL caps it exactly — `QUALIFY row_number() OVER (PARTITION BY "
-                "side ORDER BY price DESC) <= 5`.\n\n"
+                "side ORDER BY CASE WHEN side = 'bid' THEN -price ELSE price END) <= 5`. "
+                "The side-aware ordering matters: best bids are highest, while best asks are lowest.\n\n"
                 "### Cost under LATERAL\n\n"
                 "Books are fetched in batches of up to 200 tokens per request, which is what "
                 "makes a join across a whole topic affordable: measured at 12.85s for 100 books "
@@ -139,19 +141,23 @@ class OrderbookFunction(RowTransformFunction[OrderbookArgs]):
             example_queries=examples(
                 (
                     "Full depth on both sides of one outcome's book",
-                    "SELECT b.side, b.price, b.size FROM ("
-                    "SELECT o.token_id FROM polymarket.main.markets("
-                    "closed => 'false', order_by => 'volume24hr', ascending => 'false') m, "
-                    "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, "
-                    "LATERAL polymarket.main.orderbook(t.token_id) b "
-                    "ORDER BY b.side, b.price DESC",
+                    (
+                        "SELECT b.side, b.price, b.size FROM ("
+                        "SELECT o.token_id FROM polymarket.main.markets("
+                        "closed => 'false', order_by => 'volume24hr', ascending => 'false') m, "
+                        "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, "
+                        "LATERAL polymarket.main.orderbook(t.token_id) b "
+                        "ORDER BY b.side, b.price DESC"
+                    ),
                 ),
                 (
                     "Total resting size per side across a whole topic, in one query",
-                    "SELECT b.side, sum(b.size) AS resting FROM polymarket.main.markets("
-                    "tag_id => '21', closed => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
-                    "LATERAL polymarket.main.orderbook(o.token_id) b "
-                    "GROUP BY b.side",
+                    (
+                        "SELECT b.side, sum(b.size) AS resting FROM polymarket.main.markets("
+                        "tag_id => '21', closed => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
+                        "LATERAL polymarket.main.orderbook(o.token_id) b "
+                        "GROUP BY b.side"
+                    ),
                 ),
             ),
         )
@@ -254,19 +260,23 @@ class QuoteFunction(RowTransformFunction[TokenArgs]):
             example_queries=examples(
                 (
                     "Live implied probability of every outcome in a topic",
-                    "SELECT m.question, o.outcome, q.midpoint, q.spread "
-                    "FROM polymarket.main.markets(tag_id => '21', closed => 'false', "
-                    "order_by => 'volume24hr', ascending => 'false') m, "
-                    "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
-                    "LATERAL polymarket.main.quote(o.token_id) q LIMIT 40",
+                    (
+                        "SELECT m.question, o.outcome, q.midpoint, q.spread "
+                        "FROM polymarket.main.markets(tag_id => '21', closed => 'false', "
+                        "order_by => 'volume24hr', ascending => 'false') m, "
+                        "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
+                        "LATERAL polymarket.main.quote(o.token_id) q LIMIT 40"
+                    ),
                 ),
                 (
                     "The widest spreads among busy markets — where liquidity is thin",
-                    "SELECT m.question, o.outcome, q.spread FROM polymarket.main.markets("
-                    "closed => 'false', order_by => 'volume24hr', ascending => 'false') m, "
-                    "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
-                    "LATERAL polymarket.main.quote(o.token_id) q "
-                    "WHERE q.spread IS NOT NULL ORDER BY q.spread DESC LIMIT 20",
+                    (
+                        "SELECT m.question, o.outcome, q.spread FROM polymarket.main.markets("
+                        "closed => 'false', order_by => 'volume24hr', ascending => 'false') m, "
+                        "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
+                        "LATERAL polymarket.main.quote(o.token_id) q "
+                        "WHERE q.spread IS NOT NULL ORDER BY q.spread DESC LIMIT 20"
+                    ),
                 ),
             ),
         )
@@ -386,11 +396,11 @@ class PriceHistoryFunction(RowTransformFunction[PriceHistoryArgs]):
                 "Polymarket publishes one price per sampled instant, so each row is a single "
                 "`price` rather than a bar. `fidelity` is the gap between samples in minutes; "
                 "`period` is how far back to look.\n\n"
-                "### Window\n\n"
-                "`period` and an explicit `start_ts`/`end_ts` window are alternatives — "
-                "passing `start_ts` takes precedence. A window that ends in the past contains "
-                "only settled points and is cached for a day; one running up to now carries a "
-                "still-moving last point and takes the origin's 90-second TTL.\n\n"
+                "### Window and caching\n\n"
+                "Every call ends at the present and requires both `period` and `fidelity`. The "
+                "series therefore contains a still-forming final point and follows the origin's "
+                "90-second cache lifetime. Explicit start/end windows are not part of the SQL "
+                "surface.\n\n"
                 "### Prices are probabilities\n\n"
                 "Each `price` is USDC per share between 0 and 1, so the curve reads as the "
                 "market's implied probability over time. These are traded prices rather than a "
@@ -401,20 +411,24 @@ class PriceHistoryFunction(RowTransformFunction[PriceHistoryArgs]):
             example_queries=examples(
                 (
                     "A week of hourly implied probability for the busiest open market",
-                    "SELECT h.ts, h.price FROM ("
-                    "SELECT o.token_id FROM polymarket.main.markets("
-                    "closed => 'false', order_by => 'volume24hr', ascending => 'false') m, "
-                    "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, "
-                    "LATERAL polymarket.main.price_history(t.token_id, '1w', 60) h ORDER BY h.ts",
+                    (
+                        "SELECT h.ts, h.price FROM ("
+                        "SELECT o.token_id FROM polymarket.main.markets("
+                        "closed => 'false', order_by => 'volume24hr', ascending => 'false') m, "
+                        "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, "
+                        "LATERAL polymarket.main.price_history(t.token_id, '1w', 60) h ORDER BY h.ts"
+                    ),
                 ),
                 (
                     "How far each outcome moved over the last day",
-                    "SELECT o.outcome, max(h.price) - min(h.price) AS swing "
-                    "FROM (SELECT outcomes FROM polymarket.main.markets(closed => 'false', "
-                    "order_by => 'volume24hr', ascending => 'false') LIMIT 3) m, "
-                    "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
-                    "LATERAL polymarket.main.price_history(o.token_id, '1w', 60) h "
-                    "GROUP BY o.outcome ORDER BY swing DESC",
+                    (
+                        "SELECT o.outcome, max(h.price) - min(h.price) AS swing "
+                        "FROM (SELECT outcomes FROM polymarket.main.markets(closed => 'false', "
+                        "order_by => 'volume24hr', ascending => 'false') LIMIT 3) m, "
+                        "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
+                        "LATERAL polymarket.main.price_history(o.token_id, '1d', 60) h "
+                        "GROUP BY o.outcome ORDER BY swing DESC"
+                    ),
                 ),
             ),
         )
@@ -457,7 +471,7 @@ class PriceHistoryFunction(RowTransformFunction[PriceHistoryArgs]):
             for index, (token_id, period, fidelity) in enumerate(
                 zip(tokens, periods, fidelities, strict=True)
             ):
-                if token_id is None:
+                if token_id is None or period is None or fidelity is None:
                     continue
                 try:
                     history = api.price_history(
@@ -465,8 +479,8 @@ class PriceHistoryFunction(RowTransformFunction[PriceHistoryArgs]):
                         # The wire parameter is still called `interval`; the SQL
                         # argument is `period` because `interval` is a DuckDB
                         # type keyword and `interval => '1w'` is a parser error.
-                        interval=str(period) if period else "1w",
-                        fidelity=int(fidelity) if fidelity else 60,
+                        interval=str(period),
+                        fidelity=int(fidelity),
                         client=client,
                         hint=hint,
                     )
@@ -486,12 +500,21 @@ class TradesArgs:
 
     ``max_rows`` is mandatory rather than defaulted because an active market's
     tape is effectively unbounded, and ``side`` because it changes what the API
-    returns rather than merely what SQL keeps. Pass ``0`` for every row and
-    ``''`` for both sides.
+    returns rather than merely what SQL keeps. The Data API refuses offsets
+    beyond 10,000, so the declared maximum is the largest result this endpoint
+    can return reliably. Pass ``''`` for both sides.
     """
 
     condition_id: Annotated[str, Arg(0, doc="On-chain market id whose tape to read")]
-    max_rows: Annotated[int, Arg(1, doc="Stop after this many trades; 0 fetches the whole tape", ge=0)]
+    max_rows: Annotated[
+        int,
+        Arg(
+            1,
+            doc=f"Stop after this many trades (1-{api.TRADES_MAX_ROWS})",
+            ge=1,
+            le=api.TRADES_MAX_ROWS,
+        ),
+    ]
     side: Annotated[
         str,
         Arg(
@@ -538,9 +561,9 @@ class TradesFunction(RowTransformFunction[TradesArgs]):
                 "in a way it is not on a conventional exchange.\n\n"
                 "### Volume\n\n"
                 "An active market can have a very long tape, which is why `max_rows` is "
-                "required rather than defaulted — the call should say how much it wants. Pass "
-                "0 for the whole history, and expect it to take a while. "
-                "Pass 0 for the whole history, and expect it to take a while.\n\n"
+                "required rather than defaulted — the call should say how much it wants. The "
+                f"Data API refuses deeper offsets, so the maximum is {api.TRADES_MAX_ROWS:,} "
+                "trades rather than an `all` sentinel that eventually fails.\n\n"
                 "### Prices arrive as floats\n\n"
                 "The Data API sends price and size as JSON numbers rather than strings. They are "
                 "recovered to exact `DECIMAL` through the shortest round-tripping "
@@ -549,19 +572,23 @@ class TradesFunction(RowTransformFunction[TradesArgs]):
             example_queries=examples(
                 (
                     "The most recent prints on the busiest open market",
-                    "SELECT t.ts, t.side, t.outcome, t.price, t.size, t.trader_name FROM ("
-                    "SELECT condition_id FROM polymarket.main.markets("
-                    "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.trades(m.condition_id, 100, '') t "
-                    "ORDER BY t.ts DESC",
+                    (
+                        "SELECT t.ts, t.side, t.outcome, t.price, t.size, t.trader_name FROM ("
+                        "SELECT condition_id FROM polymarket.main.markets("
+                        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
+                        "LATERAL polymarket.main.trades(m.condition_id, 100, '') t "
+                        "ORDER BY t.ts DESC"
+                    ),
                 ),
                 (
                     "Volume-weighted average price by outcome, from the tape",
-                    "SELECT t.outcome, sum(t.price * t.size) / sum(t.size) AS vwap FROM ("
-                    "SELECT condition_id FROM polymarket.main.markets("
-                    "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.trades(m.condition_id, 100, '') t "
-                    "GROUP BY t.outcome",
+                    (
+                        "SELECT t.outcome, sum(t.price * t.size) / sum(t.size) AS vwap FROM ("
+                        "SELECT condition_id FROM polymarket.main.markets("
+                        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
+                        "LATERAL polymarket.main.trades(m.condition_id, 100, '') t "
+                        "GROUP BY t.outcome"
+                    ),
                 ),
             ),
         )
@@ -598,12 +625,12 @@ class TradesFunction(RowTransformFunction[TradesArgs]):
         hint = CacheHint()
         with api.open_client() as client:
             for index, (condition_id, cap, side) in enumerate(zip(ids, caps, sides, strict=True)):
-                if condition_id is None:
+                if condition_id is None or cap is None or side is None:
                     continue
                 found = api.trades(
                     str(condition_id),
                     side=str(side) if side else None,
-                    limit=int(cap) if cap else None,
+                    limit=int(cap),
                     client=client,
                     hint=hint,
                 )
@@ -664,19 +691,23 @@ class HoldersFunction(RowTransformFunction[HoldersArgs]):
             example_queries=examples(
                 (
                     "The biggest positions in the busiest open market",
-                    "SELECT h.outcome_index, h.holder_name, h.amount FROM ("
-                    "SELECT condition_id FROM polymarket.main.markets("
-                    "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.holders(m.condition_id, 20) h "
-                    "ORDER BY h.amount DESC",
+                    (
+                        "SELECT h.outcome_index, h.holder_name, h.amount FROM ("
+                        "SELECT condition_id FROM polymarket.main.markets("
+                        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
+                        "LATERAL polymarket.main.holders(m.condition_id, 20) h "
+                        "ORDER BY h.amount DESC"
+                    ),
                 ),
                 (
                     "How concentrated each side of a market is",
-                    "SELECT h.token_id, count(*) AS holders, sum(h.amount) AS shares, "
-                    "max(h.amount) / sum(h.amount) AS top_holder_share FROM ("
-                    "SELECT condition_id FROM polymarket.main.markets("
-                    "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.holders(m.condition_id, 20) h GROUP BY h.token_id",
+                    (
+                        "SELECT h.token_id, count(*) AS holders, sum(h.amount) AS shares, "
+                        "max(h.amount) / sum(h.amount) AS top_holder_share FROM ("
+                        "SELECT condition_id FROM polymarket.main.markets("
+                        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
+                        "LATERAL polymarket.main.holders(m.condition_id, 20) h GROUP BY h.token_id"
+                    ),
                 ),
             ),
         )
@@ -712,13 +743,13 @@ class HoldersFunction(RowTransformFunction[HoldersArgs]):
         hint = CacheHint()
         with api.open_client() as client:
             for index, (condition_id, cap) in enumerate(zip(ids, caps, strict=True)):
-                if condition_id is None:
+                if condition_id is None or cap is None:
                     continue
                 found = flatten_holders(
                     str(condition_id),
                     api.holders(
                         str(condition_id),
-                        limit=int(cap) if cap else None,
+                        limit=int(cap),
                         client=client,
                         hint=hint,
                     ),
@@ -786,6 +817,11 @@ class PositionsFunction(RowTransformFunction[PositionsArgs]):
                 "`avg_price` against `cur_price` gives the direction directly, and both are "
                 "probabilities between 0 and 1. `redeemable` marks a resolved market whose "
                 "position can be cashed out.\n\n"
+                "### Cross-API lifecycle\n\n"
+                "The Data API can retain a position after Gamma retires its catalog record. In "
+                "that case the row remains valid here, but passing its `condition_id` to "
+                "`market()` returns no row; use the denormalised `title` and `event_slug` carried "
+                "by the position itself.\n\n"
                 "### Freshness\n\n"
                 "Polymarket declares `max-age=5` here, the shortest TTL it publishes anywhere, "
                 "because a position's value moves with the market price."
@@ -793,23 +829,27 @@ class PositionsFunction(RowTransformFunction[PositionsArgs]):
             example_queries=examples(
                 (
                     "What else the biggest holder in a busy market is betting on",
-                    "SELECT p.title, p.outcome, p.size, p.cash_pnl FROM ("
-                    "SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets("
-                    "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.holders(m.condition_id, 20) h "
-                    "ORDER BY h.amount DESC LIMIT 1) w, "
-                    "LATERAL polymarket.main.positions(w.proxy_wallet, 100) p "
-                    "ORDER BY p.current_value DESC",
+                    (
+                        "SELECT p.title, p.outcome, p.size, p.cash_pnl FROM ("
+                        "SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets("
+                        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
+                        "LATERAL polymarket.main.holders(m.condition_id, 20) h "
+                        "ORDER BY h.amount DESC LIMIT 1) w, "
+                        "LATERAL polymarket.main.positions(w.proxy_wallet, 100) p "
+                        "ORDER BY p.current_value DESC"
+                    ),
                 ),
                 (
                     "How that holder's book is doing overall",
-                    "SELECT count(*) AS positions, sum(p.current_value) AS value, "
-                    "sum(p.cash_pnl) AS unrealised FROM ("
-                    "SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets("
-                    "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.holders(m.condition_id, 20) h "
-                    "ORDER BY h.amount DESC LIMIT 1) w, "
-                    "LATERAL polymarket.main.positions(w.proxy_wallet, 100) p",
+                    (
+                        "SELECT count(*) AS positions, sum(p.current_value) AS value, "
+                        "sum(p.cash_pnl) AS unrealised FROM ("
+                        "SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets("
+                        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
+                        "LATERAL polymarket.main.holders(m.condition_id, 20) h "
+                        "ORDER BY h.amount DESC LIMIT 1) w, "
+                        "LATERAL polymarket.main.positions(w.proxy_wallet, 100) p"
+                    ),
                 ),
             ),
         )
@@ -847,11 +887,11 @@ class PositionsFunction(RowTransformFunction[PositionsArgs]):
         hint = CacheHint()
         with api.open_client() as client:
             for index, (wallet, cap) in enumerate(zip(wallets, caps, strict=True)):
-                if wallet is None:
+                if wallet is None or cap is None:
                     continue
                 found = api.positions(
                     str(wallet),
-                    limit=int(cap) if cap else None,
+                    limit=int(cap) if int(cap) > 0 else None,
                     client=client,
                     hint=hint,
                 )
@@ -877,7 +917,15 @@ class ActivityArgs:
     """
 
     proxy_wallet: Annotated[str, Arg(0, doc="Wallet address whose history to read")]
-    max_rows: Annotated[int, Arg(1, doc="Stop after this many entries; 0 fetches the whole history", ge=0)]
+    max_rows: Annotated[
+        int,
+        Arg(
+            1,
+            doc=f"Stop after this many entries (1-{api.ACTIVITY_MAX_ROWS})",
+            ge=1,
+            le=api.ACTIVITY_MAX_ROWS,
+        ),
+    ]
     activity_type: Annotated[
         str,
         Arg(
@@ -946,27 +994,32 @@ class ActivityFunction(RowTransformFunction[ActivityArgs]):
                 "markets, and this goes wallet to everything it has ever done. All three are "
                 "public because Polymarket settles on a public chain.\n\n"
                 "### Volume\n\n"
-                "An active wallet has a very long history, so `max_rows` is required; pass 0 for all of it."
+                f"An active wallet has a very long history, so `max_rows` is required and capped "
+                f"at {api.ACTIVITY_MAX_ROWS:,}, the deepest history the Data API can page reliably."
             ),
             example_queries=examples(
                 (
                     "How the biggest holder in a busy market built their position",
-                    "SELECT a.ts, a.activity_type, a.side, a.price, a.size FROM ("
-                    "SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets("
-                    "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.holders(m.condition_id, 20) h "
-                    "ORDER BY h.amount DESC LIMIT 1) w, "
-                    "LATERAL polymarket.main.activity(w.proxy_wallet, 500, '') a ORDER BY a.ts DESC",
+                    (
+                        "SELECT a.ts, a.activity_type, a.side, a.price, a.size FROM ("
+                        "SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets("
+                        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
+                        "LATERAL polymarket.main.holders(m.condition_id, 20) h "
+                        "ORDER BY h.amount DESC LIMIT 1) w, "
+                        "LATERAL polymarket.main.activity(w.proxy_wallet, 500, '') a ORDER BY a.ts DESC"
+                    ),
                 ),
                 (
                     "What kinds of activity a large wallet actually generates",
-                    "SELECT a.activity_type, count(*) AS entries FROM ("
-                    "SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets("
-                    "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                    "LATERAL polymarket.main.holders(m.condition_id, 20) h "
-                    "ORDER BY h.amount DESC LIMIT 1) w, "
-                    "LATERAL polymarket.main.activity(w.proxy_wallet, 500, '') a GROUP BY a.activity_type "
-                    "ORDER BY entries DESC",
+                    (
+                        "SELECT a.activity_type, count(*) AS entries FROM ("
+                        "SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets("
+                        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
+                        "LATERAL polymarket.main.holders(m.condition_id, 20) h "
+                        "ORDER BY h.amount DESC LIMIT 1) w, "
+                        "LATERAL polymarket.main.activity(w.proxy_wallet, 500, '') a GROUP BY a.activity_type "
+                        "ORDER BY entries DESC"
+                    ),
                 ),
             ),
         )
@@ -1005,12 +1058,12 @@ class ActivityFunction(RowTransformFunction[ActivityArgs]):
         hint = CacheHint()
         with api.open_client() as client:
             for index, (wallet, cap, kind) in enumerate(zip(wallets, caps, kinds, strict=True)):
-                if wallet is None:
+                if wallet is None or cap is None or kind is None:
                     continue
                 found = api.activity(
                     str(wallet),
                     activity_type=str(kind) if kind else None,
-                    limit=int(cap) if cap else None,
+                    limit=int(cap),
                     client=client,
                     hint=hint,
                 )
@@ -1038,13 +1091,13 @@ class FillArgs:
 
 
 class FillPriceFunction(RowTransformFunction[FillArgs]):
-    """What a given size would actually cost, having walked the book."""
+    """The displayed-book fill price for a size, before any applicable fees."""
 
     FIXED_SCHEMA: ClassVar[pa.Schema] = FILL_SCHEMA
 
     class Meta:
         name = "fill_price"
-        description = "What a given order size would actually cost after walking the book"
+        description = "Displayed-book fill price and slippage for a given order size, before fees"
         categories = ["market-data", "blended"]
         projection_pushdown = True
         tags = docs(
@@ -1056,8 +1109,9 @@ class FillPriceFunction(RowTransformFunction[FillArgs]):
                 "this instead of `quote()` whenever size matters: a market can quote a one-tick "
                 "spread and hold fifteen shares behind it, so the midpoint is a real price at "
                 "which almost nothing trades. `avg_price` is what the position costs per share, "
-                "`slippage` is what the size cost you over the touch, and `fully_filled` says "
-                "whether the book could cover the request at all."
+                "`slippage` is what the size cost over the touch, and `fully_filled` says "
+                "whether the book could cover the request at all. Values are pre-fee: this "
+                "function models displayed liquidity, not venue fees."
             ),
             md=(
                 "One row per request, computed from the same batched book `orderbook()` "
@@ -1072,7 +1126,8 @@ class FillPriceFunction(RowTransformFunction[FillArgs]):
                 "distance from the touch, signed so that it is always the cost of size rather "
                 "than a direction — never negative. `fully_filled = false` means the book ran "
                 "out: the row prices the portion that could fill, and the rest of the order "
-                "would move the price further than this reports.\n\n"
+                "would move the price further than this reports. `notional` and `avg_price` are "
+                "computed from displayed book levels before any applicable venue fees.\n\n"
                 "### Sizing a strategy\n\n"
                 "Comparing `avg_price` across candidates at the size you actually intend to "
                 "trade is a different ranking from comparing midpoints, and it is the one that "
@@ -1080,21 +1135,25 @@ class FillPriceFunction(RowTransformFunction[FillArgs]):
             ),
             example_queries=examples(
                 (
-                    "What 5,000 shares would really cost on the busiest market",
-                    "SELECT f.side, f.avg_price, f.touch_price, f.slippage, f.fully_filled "
-                    "FROM (SELECT o.token_id FROM polymarket.main.markets(closed => 'false', "
-                    "order_by => 'volume24hr', ascending => 'false') m, "
-                    "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, "
-                    "LATERAL polymarket.main.fill_price(t.token_id, 'buy', 5000) f",
+                    "Displayed-book cost of 5,000 shares on the busiest market, before fees",
+                    (
+                        "SELECT f.side, f.avg_price, f.touch_price, f.slippage, f.fully_filled "
+                        "FROM (SELECT o.token_id FROM polymarket.main.markets(closed => 'false', "
+                        "order_by => 'volume24hr', ascending => 'false') m, "
+                        "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, "
+                        "LATERAL polymarket.main.fill_price(t.token_id, 'buy', 5000) f"
+                    ),
                 ),
                 (
                     "Which outcomes in a topic can absorb real size, and which cannot",
-                    "SELECT m.question, o.outcome, f.avg_price, f.filled_size, f.fully_filled "
-                    "FROM polymarket.main.markets(tag_id => '21', closed => 'false', "
-                    "order_by => 'volume24hr', ascending => 'false') m, "
-                    "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
-                    "LATERAL polymarket.main.fill_price(o.token_id, 'buy', 10000) f "
-                    "WHERE NOT f.fully_filled LIMIT 20",
+                    (
+                        "SELECT m.question, o.outcome, f.avg_price, f.filled_size, f.fully_filled "
+                        "FROM polymarket.main.markets(tag_id => '21', closed => 'false', "
+                        "order_by => 'volume24hr', ascending => 'false') m, "
+                        "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
+                        "LATERAL polymarket.main.fill_price(o.token_id, 'buy', 10000) f "
+                        "WHERE NOT f.fully_filled LIMIT 20"
+                    ),
                 ),
             ),
         )
@@ -1107,7 +1166,7 @@ class FillPriceFunction(RowTransformFunction[FillArgs]):
                     "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, "
                     "LATERAL polymarket.main.fill_price(t.token_id, 'buy', 5000) f"
                 ),
-                description="What 5,000 shares would really cost on the busiest market",
+                description="Displayed-book cost of 5,000 shares on the busiest market, before fees",
             ),
         ]
 
@@ -1132,12 +1191,12 @@ class FillPriceFunction(RowTransformFunction[FillArgs]):
             # Same batched fetch orderbook() uses: 200 tokens to a request.
             books = api.books([str(t) for t in tokens if t is not None], client=client)
             for index, (token_id, side, size) in enumerate(zip(tokens, sides, sizes, strict=True)):
-                if token_id is None or size is None:
+                if token_id is None or side is None or size is None:
                     continue
                 rows.append(
                     fill_from_book(
                         str(token_id),
-                        str(side or "buy").lower(),
+                        str(side).lower(),
                         size,
                         books.get(str(token_id)) or {},
                     )

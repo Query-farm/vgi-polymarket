@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from vgi_polymarket import polymarket_api as api
-from vgi_polymarket.paging import KeysetScanState, OffsetScanState
+from vgi_polymarket.paging import KeysetScanState, OffsetScanState, SearchScanState
 
 
 def _client(handler) -> httpx.Client:
@@ -114,6 +114,69 @@ class TestScanState:
         state = OffsetScanState()
         assert state.offset == 0 and state.done is False
 
+    def test_search_state_starts_on_page_one(self) -> None:
+        state = SearchScanState()
+        assert state.page == 1 and state.pages == 0 and state.done is False
+
+
+class TestSearchPaging:
+    @staticmethod
+    def _tick(state: SearchScanState, pages: dict[int, tuple[list[dict], bool]]):
+
+        from vgi_polymarket.paging import emit_search_page
+        from vgi_polymarket.schemas import TAG_SCHEMA
+
+        captured: dict[str, object] = {}
+
+        class Out:
+            def emit(self, batch, cache_control=None, **kw):
+                captured["batch"] = batch
+
+            def finish(self):
+                captured["finished"] = True
+
+        class Params:
+            output_schema = TAG_SCHEMA
+
+        def fetch(*, page: int, hint):
+            return pages[page]
+
+        emit_search_page(
+            Params(),
+            state,
+            Out(),
+            fetch=fetch,
+            shape=lambda row: {"tag_id": row["id"]},
+        )
+        return captured
+
+    def test_has_more_not_page_length_controls_continuation(self) -> None:
+        """A sparse intermediate page must not silently end the search."""
+        state = SearchScanState()
+        first = self._tick(state, {1: ([{"id": "a"}], True)})
+        assert first["batch"].column("tag_id").to_pylist() == ["a"]
+        assert state.page == 2 and state.done is False
+
+        second = self._tick(state, {2: ([{"id": "b"}], False)})
+        assert second["batch"].column("tag_id").to_pylist() == ["b"]
+        assert state.done is True
+
+    def test_search_has_the_same_runaway_guard_as_other_scans(self) -> None:
+        state = SearchScanState(page=api.MAX_PAGES + 1, pages=api.MAX_PAGES)
+        with pytest.raises(api.PolymarketPageLimitError):
+            self._tick(state, {})
+
+    def test_api_reads_authoritative_has_more(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"events": [{"id": "only-one"}], "pagination": {"hasMore": True}},
+            )
+
+        with _client(handler) as client:
+            rows, has_more = api.search_page_with_more("x", client=client)
+        assert len(rows) == 1 and has_more is True
+
 
 class TestOffsetPaging:
     def test_a_full_page_continues_and_a_short_page_ends(self) -> None:
@@ -164,9 +227,8 @@ class TestPageLimitGuard:
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json=[{"id": "always-full"}] * 100)
 
-        with _client(handler) as client:
-            with pytest.raises(api.PolymarketPageLimitError):
-                api._offset_all(api.data_base_url(), "/trades", client=client, page_limit=100)
+        with _client(handler) as client, pytest.raises(api.PolymarketPageLimitError):
+            api._offset_all(api.data_base_url(), "/trades", client=client, page_limit=100)
 
 
 class TestBatching:
