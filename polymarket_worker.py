@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.13"
-# dependencies = ["vgi-python[http]", "vgi-rpc", "httpx"]
+# dependencies = ["vgi-python[http,haybarn]>=0.37.3", "vgi-rpc>=0.47.2", "httpx>=0.28"]
 #
 # [tool.uv.sources]
 # vgi-python = { path = "../vgi-python" }
