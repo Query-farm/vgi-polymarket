@@ -884,12 +884,34 @@ def fill_from_book(token_id: str, side: str, size: Any, payload: dict[str, Any])
 
 
 def flatten_price_history(token_id: str, history: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Turn the CLOB's ``{"t": epoch, "p": price}`` points into named columns."""
-    return [
-        {"token_id": token_id, "ts": point.get("t"), "price": point.get("p")}
-        for point in history
-        if isinstance(point, dict)
-    ]
+    """Name CLOB points and collapse repeated observations within this response.
+
+    The origin can append its latest sample twice. Keep the first observation
+    at each timestamp when the exact numeric prices agree; contradictory
+    prices are an error rather than an arbitrary first/last choice. Compare
+    before Arrow's decimal conversion, without rounding. Invalid/absent values
+    still pass through for the usual NULL conversion, and output order stays
+    unchanged. No observation state survives this function call.
+    """
+    rows: list[dict[str, Any]] = []
+    seen: dict[datetime, Decimal] = {}
+    for point in history:
+        if not isinstance(point, dict):
+            continue
+        timestamp = to_timestamp(point.get("t"))
+        price = to_decimal(point.get("p"))
+        if timestamp is not None and price is not None:
+            previous = seen.get(timestamp)
+            if previous is not None:
+                if previous != price:
+                    raise ValueError(
+                        f"Conflicting price-history observations for token {token_id!r} "
+                        f"at {timestamp.isoformat()}"
+                    )
+                continue
+            seen[timestamp] = price
+        rows.append({"token_id": token_id, "ts": point.get("t"), "price": point.get("p")})
+    return rows
 
 
 def trade_row(raw: dict[str, Any]) -> dict[str, Any]:

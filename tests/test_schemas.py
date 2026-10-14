@@ -15,6 +15,7 @@ from vgi_polymarket.schemas import (
     MARKET_SCHEMA,
     ORDERBOOK_SCHEMA,
     PRICE,
+    PRICE_HISTORY_SCHEMA,
     TRADE_SCHEMA,
     batch_from_rows,
     fill_from_book,
@@ -254,6 +255,65 @@ class TestEventParentStamping:
         row = market_row({"conditionId": "0xabc", "event_id": "99", "event_slug": "the-event"})
         assert row["event_id"] == "99"
         assert row["event_slug"] == "the-event"
+
+
+class TestPriceHistoryObservations:
+    def test_repeated_terminal_observation_is_returned_once(self) -> None:
+        rows = flatten_price_history("tok", [{"t": 60, "p": 0.1}, {"t": 120, "p": 0.2}, {"t": 120, "p": 0.2}])
+        assert rows == [
+            {"token_id": "tok", "ts": 60, "price": 0.1},
+            {"token_id": "tok", "ts": 120, "price": 0.2},
+        ]
+
+    def test_interspersed_duplicates_preserve_first_appearance_order(self) -> None:
+        history = [
+            {"t": 180, "p": "0.30"},
+            {"t": 60, "p": "0.10"},
+            {"t": 180, "p": 0.3},
+            {"t": 120, "p": 0.2},
+            {"t": 60, "p": Decimal("0.100")},
+        ]
+        rows = flatten_price_history("tok", history)
+        assert [(row["ts"], row["price"]) for row in rows] == [(180, "0.30"), (60, "0.10"), (120, 0.2)]
+
+    @pytest.mark.parametrize("equivalent", [0.1, "0.100000", Decimal("0.10")])
+    def test_numeric_representation_does_not_create_a_conflict(self, equivalent: object) -> None:
+        rows = flatten_price_history("tok", [{"t": 60, "p": 0.1}, {"t": 60.0, "p": equivalent}])
+        assert rows == [{"token_id": "tok", "ts": 60, "price": 0.1}]
+
+    @pytest.mark.parametrize("prices", [("0.1", "0.2"), ("0.1000001", "0.1000002"), (0, 1)])
+    def test_conflicting_prices_are_rejected_without_rounding(self, prices: tuple[object, object]) -> None:
+        with pytest.raises(ValueError, match="Conflicting price-history observations.*'tok'.*1970-01-01"):
+            flatten_price_history(
+                "tok", [{"t": 60, "p": prices[0]}, {"t": 120, "p": 0.3}, {"t": 60, "p": prices[1]}]
+            )
+
+    @pytest.mark.parametrize("price", [None, "", "bad", "NaN", "Infinity", True])
+    def test_invalid_prices_still_produce_null_rows(self, price: object) -> None:
+        rows = flatten_price_history("tok", [{"t": 60, "p": price}, {"t": 60, "p": price}])
+        batch = batch_from_rows(rows, PRICE_HISTORY_SCHEMA)
+        assert batch.num_rows == 2
+        assert batch.column("price").to_pylist() == [None, None]
+
+    @pytest.mark.parametrize("timestamp", [None, "", "bad", 253402300800, True])
+    def test_invalid_timestamps_still_produce_null_rows(self, timestamp: object) -> None:
+        rows = flatten_price_history("tok", [{"t": timestamp, "p": 0.1}, {"t": timestamp, "p": 0.1}])
+        batch = batch_from_rows(rows, PRICE_HISTORY_SCHEMA)
+        assert batch.num_rows == 2
+        assert batch.column("ts").to_pylist() == [None, None]
+
+    def test_fine_price_keeps_existing_null_conversion(self) -> None:
+        rows = flatten_price_history("tok", [{"t": 60, "p": "0.1000001"}])
+        assert batch_from_rows(rows, PRICE_HISTORY_SCHEMA).column("price").to_pylist() == [None]
+
+    def test_response_and_token_boundaries_do_not_share_observations(self) -> None:
+        for token, price in [("a", 0.1), ("b", 0.2), ("a", 0.3)]:
+            assert flatten_price_history(token, [{"t": 60, "p": price}]) == [
+                {"token_id": token, "ts": 60, "price": price}
+            ]
+
+    def test_empty_response_stays_empty(self) -> None:
+        assert flatten_price_history("tok", []) == []
 
 
 class TestOtherFlattening:
