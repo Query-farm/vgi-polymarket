@@ -20,7 +20,7 @@ import json
 import sys
 
 from vgi import Worker
-from vgi.catalog import Catalog, ReadOnlyCatalogInterface, Schema
+from vgi.catalog import Catalog, ReadOnlyCatalogInterface, Schema, constraint_record
 from vgi.catalog.catalog_interface import CatalogInfo
 from vgi.catalog.descriptors import Table
 
@@ -885,8 +885,26 @@ _POLYMARKET_CATALOG = Catalog(
                     comment="Every topic on Polymarket; the tag_id everything else filters on",
                     tags=_TAGS_DOCS,
                     column_comments=column_comments(TAG_SCHEMA),
-                    primary_key=(("tag_id",),),
-                    not_null=("tag_id",),
+                    constraints=(
+                        constraint_record(
+                            ["main"],
+                            "tags",
+                            "pk",
+                            "PRIMARY_KEY",
+                            [["tag_id"]],
+                            enforcement="ENFORCED",
+                            validation="ALL_ROWS",
+                        ),
+                        constraint_record(
+                            ["main"],
+                            "tags",
+                            "tag_id_not_null",
+                            "NOT_NULL",
+                            [["tag_id"]],
+                            enforcement="ENFORCED",
+                            validation="ALL_ROWS",
+                        ),
+                    ),
                     # Inlined so the planner does not have to ask. The catalog
                     # grows slowly — it was ~7,300 rows when measured — so an
                     # estimate stale by a few hundred still beats no estimate.
@@ -899,8 +917,26 @@ _POLYMARKET_CATALOG = Catalog(
                     comment="Recurring question series, each opening a new event per occurrence",
                     tags=_SERIES_DOCS,
                     column_comments=column_comments(SERIES_SCHEMA),
-                    primary_key=(("series_id",),),
-                    not_null=("series_id",),
+                    constraints=(
+                        constraint_record(
+                            ["main"],
+                            "series",
+                            "pk",
+                            "PRIMARY_KEY",
+                            [["series_id"]],
+                            enforcement="ENFORCED",
+                            validation="ALL_ROWS",
+                        ),
+                        constraint_record(
+                            ["main"],
+                            "series",
+                            "series_id_not_null",
+                            "NOT_NULL",
+                            [["series_id"]],
+                            enforcement="ENFORCED",
+                            validation="ALL_ROWS",
+                        ),
+                    ),
                     cardinality_estimate=2_400,
                     statistics_cache_max_age_seconds=3_600,
                 ),

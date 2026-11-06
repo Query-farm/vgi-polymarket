@@ -306,8 +306,13 @@ class TestCatalogShape:
         assert {t.name for t in schema.tables}.isdisjoint(function_names)
 
     def test_every_table_declares_a_primary_key(self) -> None:
+        columns = {"tags": "tag_id", "series": "series_id"}
         for table in _POLYMARKET_CATALOG.schemas[0].tables:
-            assert table.primary_key, table.name
+            keys = [c for c in table.constraints if c.definition.kind == "PRIMARY_KEY"]
+            assert len(keys) == 1, table.name
+            assert keys[0].definition.column_paths == [[columns[table.name]]]
+            assert keys[0].enforcement == "ENFORCED"
+            assert keys[0].validation == "ALL_ROWS"
 
 
 def _shipped_sql() -> list[str]:
