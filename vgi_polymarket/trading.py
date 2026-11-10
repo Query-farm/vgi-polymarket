@@ -22,11 +22,11 @@ along the host boundary:
   the whole market — while :func:`positions` and :func:`activity` key on a
   proxy-wallet address.
 
-Polymarket calls the query parameter ``market`` in both places. Passing a
-condition id to ``price_history`` is answered with HTTP 200 and an empty series;
-passing a token id to ``trades`` is answered with HTTP 200 and an empty list.
-Neither is an error, so the argument names here say which is which, and the
-column comments repeat it.
+Passing a condition id to ``price_history`` is answered with HTTP 200 and an
+empty series — not an error, so it reads as a market with no history. Passing a
+token id to ``trades`` is an HTTP 400 on Data API v2 (v1 answered it with an
+empty list). The argument names here say which key is which, and the column
+comments repeat it.
 """
 
 from __future__ import annotations
@@ -505,9 +505,9 @@ class TradesArgs:
 
     ``max_rows`` is mandatory rather than defaulted because an active market's
     tape is effectively unbounded, and ``side`` because it changes what the API
-    returns rather than merely what SQL keeps. The Data API refuses offsets
-    beyond 10,000, so the declared maximum is the largest result this endpoint
-    can return reliably. Pass ``''`` for both sides.
+    returns rather than merely what SQL keeps. The declared maximum,
+    :data:`~vgi_polymarket.polymarket_api.TRADES_MAX_ROWS`, keeps one call
+    bounded. Pass ``''`` for both sides.
     """
 
     condition_id: Annotated[str, Arg(0, doc="On-chain market id whose tape to read")]
@@ -548,8 +548,8 @@ class TradesFunction(RowTransformFunction[TradesArgs]):
             result_schema=TRADE_SCHEMA,
             llm=(
                 "Individual executed trades on ONE MARKET — the public tape, newest first. "
-                "Takes a `condition_id`, NOT a token id: a token id here returns an empty list "
-                "with no error. Reach for this when you need actual prints rather than quotes: "
+                "Takes a `condition_id`, NOT a token id: a token id here is rejected with an "
+                "error. Reach for this when you need actual prints rather than quotes: "
                 "trade-by-trade flow, taker direction, a volume-weighted price, or WHO traded — "
                 "each row carries the counterparty's wallet and profile name, because "
                 "Polymarket settles on a public chain."
@@ -558,7 +558,7 @@ class TradesFunction(RowTransformFunction[TradesArgs]):
                 "One row per execution, with the trader attached.\n\n"
                 "### It takes a condition id\n\n"
                 "This is the Data API, which keys on the market rather than the outcome. A "
-                "token id returns `[]` with HTTP 200 — no error, just nothing. Each row's "
+                "token id is rejected with HTTP 400 (`invalid condition id`). Each row's "
                 "`token_id` column tells you which outcome changed hands.\n\n"
                 "### Public counterparties\n\n"
                 "`proxy_wallet`, `trader_name` and `pseudonym` identify the taker. This is "
@@ -566,9 +566,8 @@ class TradesFunction(RowTransformFunction[TradesArgs]):
                 "in a way it is not on a conventional exchange.\n\n"
                 "### Volume\n\n"
                 "An active market can have a very long tape, which is why `max_rows` is "
-                "required rather than defaulted — the call should say how much it wants. The "
-                f"Data API refuses deeper offsets, so the maximum is {api.TRADES_MAX_ROWS:,} "
-                "trades rather than an `all` sentinel that eventually fails.\n\n"
+                "required rather than defaulted — the call should say how much it wants, up "
+                f"to {api.TRADES_MAX_ROWS:,} trades per call.\n\n"
                 "### Prices arrive as floats\n\n"
                 "The Data API sends price and size as JSON numbers rather than strings. They are "
                 "recovered to exact `DECIMAL` through the shortest round-tripping "
@@ -953,6 +952,14 @@ class ActivityArgs:
                 "SPLIT",
                 "CONVERSION",
                 "REFERRAL_REWARD",
+                # Documented by Data API v2 as part of its default feed; the
+                # range-event operations appear only on wallets that trade
+                # range markets.
+                "MIGRATION",
+                "DIRECTIONAL_SPLIT",
+                "DIRECTIONAL_MERGE",
+                "THRESHOLD_COMPOSE",
+                "THRESHOLD_DECOMPOSE",
             ],
         ),
     ]
@@ -1000,7 +1007,7 @@ class ActivityFunction(RowTransformFunction[ActivityArgs]):
                 "public because Polymarket settles on a public chain.\n\n"
                 "### Volume\n\n"
                 f"An active wallet has a very long history, so `max_rows` is required and capped "
-                f"at {api.ACTIVITY_MAX_ROWS:,}, the deepest history the Data API can page reliably."
+                f"at {api.ACTIVITY_MAX_ROWS:,} entries per call."
             ),
             example_queries=examples(
                 (

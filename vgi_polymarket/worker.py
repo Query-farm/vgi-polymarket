@@ -694,7 +694,7 @@ _CATALOG_TAGS = {
         "docs say which it takes.\n\n"
         "Getting it wrong fails differently by direction: a market key passed where an outcome "
         "key belongs is an HTTP 404 in one place and an empty price series in another, and an "
-        "outcome key passed to the trade tape returns an empty list. Two of the three are "
+        "outcome key passed to the trade tape is an HTTP 400. The empty price series is "
         "indistinguishable from 'nothing traded'.\n\n"
         "### How the data is shaped\n\n"
         "- **Tag** — a topic such as Crypto or Politics. The filter almost everything accepts, "

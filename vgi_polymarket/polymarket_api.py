@@ -7,8 +7,10 @@ different paging styles and two different identifiers for the same market:
   markets. Keyset-paged with an opaque ``after_cursor``.
 * **CLOB** (:data:`CLOB_BASE_URL`) — live trading data: order books, quotes,
   price history. Keyed on a **token id**.
-* **Data** (:data:`DATA_BASE_URL`) — the trade tape and holder lists. Keyed on a
-  **condition id**. Offset-paged.
+* **Data** (:data:`DATA_BASE_URL`) — the trade tape, holder lists, wallet
+  positions and activity. Keyed on a **condition id** or a wallet. Served under
+  :data:`DATA_API_PREFIX` and paged by an opaque cursor; the original offset-paged
+  v1 routes were retired on 2 November 2026 and now answer HTTP 410.
 
 Only two functions in this module reach the network — :func:`_get` and
 :func:`_post_read` — and they are what the read-only guard
@@ -52,6 +54,11 @@ CLOB_BASE_URL = "https://clob.polymarket.com"
 #: The trade tape and holder lists. Keyed on condition id.
 DATA_BASE_URL = "https://data-api.polymarket.com"
 
+#: Every Data API route this module calls lives under this prefix. The bare v1
+#: paths (``/trades``, ``/holders``, ...) were retired on 2 November 2026 and
+#: answer every request with HTTP 410 ``"Data API v1 has been retired"``.
+DATA_API_PREFIX = "/v2"
+
 #: The market and event catalog paths. Note the ``/keyset`` suffix: the bare
 #: ``/markets`` and ``/events`` still answer, but with ``Deprecation: true``,
 #: ``Sunset: Fri, 01 May 2026`` and ``Warning: 299 - "use /markets/keyset"``.
@@ -83,13 +90,15 @@ SERIES_PAGE_LIMIT = 50
 #: host. Kept modest because a search is browsed, not walked.
 SEARCH_PAGE_LIMIT = 20
 
-#: The Data API's trade tape accepts larger pages and does not appear to clamp.
-DATA_PAGE_LIMIT = 500
+#: Data API v2 documents a maximum page size of 1000 on every paged route and
+#: rejects a larger ``limit`` with HTTP 400 rather than clamping it.
+DATA_PAGE_LIMIT = 1000
 
-#: The Data API refuses deeper offset walks even when more history exists.
-#: Keep the SQL-facing row caps at the last full page before those boundaries,
-#: so a request can always complete instead of failing after returning thousands
-#: of rows internally. Probed against the live API and pinned by live tests.
+#: SQL-facing row caps for the two history feeds. v2 pages by cursor and has no
+#: offset ceiling, but an active market's tape and a long-lived wallet's history
+#: are effectively unbounded, so each call must say how much it wants and stays
+#: bounded. The caps are the ones v1's offset limits imposed, kept so existing
+#: queries keep the same contract.
 TRADES_MAX_ROWS = 10_000
 ACTIVITY_MAX_ROWS = 5_000
 
@@ -425,8 +434,8 @@ def offset_page(
 ) -> list[dict[str, Any]]:
     """Fetch one offset page from an endpoint that returns a bare JSON array.
 
-    ``/tags``, ``/series`` and the Data API's tape page this way rather than
-    with a cursor, and they return the array itself rather than an envelope.
+    Gamma's ``/tags`` and ``/series`` page this way rather than with a cursor,
+    and they return the array itself rather than an envelope.
     A short page means the end of the walk.
     """
     page_params = {**(params or {}), "limit": page_limit, "offset": offset}
@@ -436,42 +445,81 @@ def offset_page(
     return payload
 
 
-def _offset_all(
-    base: str,
+def data_page(
+    path: str,
+    params: dict[str, Any] | None = None,
+    *,
+    cursor: str | None = None,
+    page_limit: int = DATA_PAGE_LIMIT,
+    client: httpx.Client | None = None,
+    hint: CacheHint | None = None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """One page of a Data API v2 route: its rows, and the cursor to the next page.
+
+    Every v2 response wraps its rows in ``data`` and pages with an opaque
+    ``pagination.next_cursor`` that is ``null`` on the last page. ``limit`` only
+    applies to the first page — once a cursor is supplied, the cursor's own page
+    size wins — so it is sent only without one. ``offset`` is never sent: v2
+    answers it with HTTP 400, even as ``offset=0``.
+
+    The filters in ``params`` must be re-sent on every page. On the feeds the
+    cursor carries only its seek anchor, so dropping a filter mid-walk silently
+    re-anchors the walk onto a different result set.
+    """
+    page_params = dict(params or {})
+    if cursor:
+        page_params["cursor"] = cursor
+    else:
+        page_params["limit"] = page_limit
+    payload = _get(data_base_url(), f"{DATA_API_PREFIX}{path}", page_params, client=client, hint=hint)
+    if not isinstance(payload, dict):
+        raise PolymarketError(200, path, f"expected an object, got {type(payload).__name__}")
+    # A documented miss is `data: null` or an empty list, never an error.
+    rows = payload.get("data") or []
+    if not isinstance(rows, list):
+        raise PolymarketError(200, path, f"expected a list under 'data', got {type(rows).__name__}")
+    pagination = payload.get("pagination")
+    next_cursor = pagination.get("next_cursor") if isinstance(pagination, dict) else None
+    return rows, (str(next_cursor) if next_cursor else None)
+
+
+def _cursor_all(
     path: str,
     params: dict[str, Any] | None = None,
     *,
     limit: int | None = None,
     client: httpx.Client | None = None,
     hint: CacheHint | None = None,
-    page_limit: int = GAMMA_PAGE_LIMIT,
+    page_limit: int = DATA_PAGE_LIMIT,
 ) -> list[dict[str, Any]]:
-    """Walk an offset-paged endpoint to exhaustion, or to ``limit`` rows.
+    """Walk a Data API v2 route to exhaustion, or to ``limit`` rows.
 
     Used only where the fetch is bounded by construction — one market's trades,
-    one market's holders. The unbounded catalog walks are scans instead, so they
-    can stream. Running out of :data:`MAX_PAGES` raises rather than returning a
-    short result that looks complete.
+    one wallet's positions or history. The unbounded catalog walks are scans
+    instead, so they can stream. The walk ends on a null ``next_cursor`` and not
+    on a short page: v2's ``has_more`` is exact, and it documents that an empty
+    or short page does not mean the walk is over. Running out of
+    :data:`MAX_PAGES` raises rather than returning a short result that looks
+    complete.
     """
+    first_page = page_limit if limit is None else max(1, min(page_limit, limit))
     rows: list[dict[str, Any]] = []
-    for page in range(MAX_PAGES):
-        wanted = page_limit if limit is None else max(1, min(page_limit, limit - len(rows)))
-        batch = offset_page(
-            base,
+    cursor: str | None = None
+    for _ in range(MAX_PAGES):
+        batch, cursor = data_page(
             path,
             params,
-            offset=page * page_limit,
+            cursor=cursor,
+            page_limit=first_page,
             client=client,
             hint=hint,
-            page_limit=wanted,
         )
         rows.extend(batch)
         if limit is not None and len(rows) >= limit:
             return rows[:limit]
-        # A page shorter than requested is the last one.
-        if len(batch) < wanted:
+        if cursor is None:
             return rows
-    raise PolymarketPageLimitError(f"{base}{path}", len(rows))
+    raise PolymarketPageLimitError(f"{data_base_url()}{DATA_API_PREFIX}{path}", len(rows))
 
 
 def markets_by_condition_id(
@@ -625,15 +673,17 @@ def activity(
     wallet holds *now*. Note the feed is broader than a trade tape — most
     entries on a long-lived wallet are ``YIELD`` accruals rather than trades —
     so a caller after executions should filter on the type.
+
+    ``start=1`` asks for the whole history: v2 floors an omitted ``start`` to
+    three years back, which would quietly drop a long-lived wallet's oldest
+    entries.
     """
-    return _offset_all(
-        data_base_url(),
+    return _cursor_all(
         "/activity",
-        {"user": proxy_wallet, "type": activity_type},
+        {"user": proxy_wallet, "type": activity_type, "start": 1},
         limit=limit,
         client=client,
         hint=hint,
-        page_limit=DATA_PAGE_LIMIT,
     )
 
 
@@ -830,20 +880,17 @@ def trades(
 ) -> list[dict[str, Any]]:
     """The public trade tape for one market, newest first.
 
-    Note the identifier. This endpoint's ``market`` parameter wants a
-    **condition id**, where the CLOB's identically-named parameter wants a token
-    id — and a token id here returns ``[]`` with HTTP 200 rather than an error.
-    The two APIs use the same parameter name for different keys, and one of the
-    two ways to get it wrong is silent in each direction.
+    Note the identifier. This endpoint's ``condition`` parameter wants a
+    **condition id**, where the CLOB's ``market`` parameter wants a token id. v2
+    rejects a token id here with HTTP 400 (``invalid condition id``); v1 answered
+    it with ``[]`` and HTTP 200, which read as a market where nothing traded.
     """
-    return _offset_all(
-        data_base_url(),
+    return _cursor_all(
         "/trades",
-        {"market": condition_id, "side": side},
+        {"condition": condition_id, "side": side},
         limit=limit,
         client=client,
         hint=hint,
-        page_limit=DATA_PAGE_LIMIT,
     )
 
 
@@ -863,15 +910,17 @@ def positions(
 
     Declares the shortest TTL Polymarket publishes (``max-age=5``): a position's
     value moves with the market price, so it is nearly live data.
+
+    v2 serves the whole position lifecycle from one route behind ``status``. Its
+    default, ``OPEN``, is what v1 ``/positions`` returned: everything still held,
+    settled-but-unredeemed winners included (``redeemable`` marks those).
     """
-    return _offset_all(
-        data_base_url(),
+    return _cursor_all(
         "/positions",
         {"user": proxy_wallet},
         limit=limit,
         client=client,
         hint=hint,
-        page_limit=DATA_PAGE_LIMIT,
     )
 
 
@@ -887,12 +936,14 @@ def holders(
     Keyed on the condition id, like :func:`trades` and unlike everything on the
     CLOB. The response is one entry per token, each carrying its own ranked
     holder list, so it is flattened by the caller into one row per holder.
+    ``limit`` counts holders *per token*, up to :data:`DATA_PAGE_LIMIT`, so one
+    page always answers it.
     """
-    payload = _get(
-        data_base_url(),
+    groups, _ = data_page(
         "/holders",
-        {"market": condition_id, "limit": limit},
+        {"condition": condition_id},
+        page_limit=limit or 100,
         client=client,
         hint=hint,
     )
-    return list(payload) if isinstance(payload, list) else []
+    return [g for g in groups if isinstance(g, dict)]

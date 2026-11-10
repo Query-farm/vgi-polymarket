@@ -323,16 +323,56 @@ class TestOtherFlattening:
 
     def test_holders_are_stamped_with_their_token(self) -> None:
         """The token lives on the group, not the holder, so it is pushed down."""
-        payload = [{"token": "tok1", "holders": [{"proxyWallet": "0x1", "amount": 644533.794669}]}]
+        payload = [{"token_id": "tok1", "holders": [{"proxy_wallet": "0x1", "amount": 644533.794669}]}]
         rows = flatten_holders("0xabc", payload)
         assert rows[0]["token_id"] == "tok1"
         assert rows[0]["condition_id"] == "0xabc"
+        assert rows[0]["proxy_wallet"] == "0x1"
+
+    def test_the_unlabelled_outcome_sentinel_is_null(self) -> None:
+        payload = [{"token_id": "tok1", "holders": [{"proxy_wallet": "0x1", "outcome_index": 999}]}]
+        assert flatten_holders("0xabc", payload)[0]["outcome_index"] is None
+
+    def test_a_v2_position_maps_onto_the_existing_columns(self) -> None:
+        from vgi_polymarket.schemas import position_row
+
+        row = position_row(
+            {
+                "proxy_wallet": "0x1",
+                "condition_id": "0xabc",
+                "token_id": "123",
+                "outcome_index": 1,
+                "current_size": 9973.41,
+                "avg_price": 0.15,
+                "current_price": 0.145,
+                "entry_cost_usdc": 1496.0115,
+                "current_value": 1446.1444,
+                "unrealized_pnl": -49.8671,
+                "percent_pnl": -3.3333,
+                "realized_pnl": 0.3442,
+                "total_size": 10000.0,
+                "redeemable": False,
+                "end_date": "2026-11-10",
+            }
+        )
+        assert row["size"] == 9973.41
+        assert row["cur_price"] == 0.145
+        assert row["initial_value"] == 1496.0115
+        assert row["cash_pnl"] == -49.8671
+        assert row["total_bought"] == 10000.0
+        assert row["token_id"] == "123"
+        assert row["end_date"] == "2026-11-10"
+
+    def test_a_missing_position_end_date_is_null(self) -> None:
+        from vgi_polymarket.schemas import position_row
+
+        assert position_row({"end_date": "1970-01-01"})["end_date"] is None
 
     def test_a_trade_price_survives_as_an_exact_decimal(self) -> None:
         from vgi_polymarket.schemas import trade_row
 
         batch = batch_from_rows(
-            [trade_row({"transactionHash": "0x1", "price": 0.955, "size": 100, "timestamp": 1788195442})],
+            [trade_row({"transaction_hash": "0x1", "price": 0.955, "size": 100, "timestamp": 1788195442})],
             TRADE_SCHEMA,
         )
         assert batch.column("price").to_pylist() == [Decimal("0.955000")]

@@ -95,15 +95,15 @@ FROM polymarket.markets(tag_id => '21', closed => 'false') m,
      LATERAL polymarket.quote(o.token_id) q;
 ```
 
-**Getting it wrong fails three different ways, and two of them are silent:**
+**Getting it wrong fails three different ways, and one of them is silent:**
 
 | Mistake | What happens |
 |---|---|
 | `condition_id` → `orderbook()` | HTTP 404 — loud |
 | `condition_id` → `price_history()` | HTTP 200, `{"history": []}` — **silent** |
-| `token_id` → `trades()` | HTTP 200, `[]` — **silent** |
+| `token_id` → `trades()` | HTTP 400, `invalid condition id` — loud (Data API v1 answered `[]` silently) |
 
-An empty result is therefore not evidence that nothing traded. That is why the
+An empty price series is therefore not evidence that nothing traded. That is why the
 argument names here say which key they want, why the column comments repeat it,
 and why `tests/test_catalog.py` checks every shipped example passes the right
 one.
@@ -194,9 +194,9 @@ best ask is the lowest.
 declare no freshness, and those are already batched 200-to-a-request; everything
 else runs on Polymarket's own declared TTLs, forwarded rather than invented.
 
-The Data API also imposes hard history boundaries: trade offsets above 10,000
-and activity offsets above 5,000 are rejected. Those functions therefore expose
-bounded `max_rows` ranges instead of a `0 means all` value that eventually fails.
+`trades()` and `activity()` expose bounded `max_rows` ranges (up to 10,000
+trades and 5,000 activity entries) instead of a `0 means all` value: an active
+market's tape and a long-lived wallet's history are effectively unbounded.
 
 ### Why there is no `markets(event_slug => …)`
 
@@ -221,10 +221,12 @@ pages three different ways:
 | `gamma-api.polymarket.com` | tags, series, events, markets | opaque `after_cursor` (keyset) |
 | `gamma-api.polymarket.com` | search | 1-based `page` number |
 | `clob.polymarket.com` | books, quotes, price history | not paged |
-| `data-api.polymarket.com` | trades, holders, positions, activity | `offset` |
+| `data-api.polymarket.com/v2` | trades, holders, positions, activity | opaque `cursor` |
 
 The split is also the identifier boundary: the CLOB keys on `token_id`, and the
-Data API keys on `condition_id` — except `positions`, which keys on a wallet.
+Data API keys on `condition_id` — except `positions` and `activity`, which key
+on a wallet. The Data API is called on its `/v2` routes: v1 (offset-paged,
+camelCase) was retired on 2 November 2026 and now answers HTTP 410.
 
 **Use `/markets/keyset`, not `/markets`.** The latter still answers, but with
 `Deprecation: true`, `Sunset: Fri, 01 May 2026` and

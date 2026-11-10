@@ -70,25 +70,37 @@ class TestPageLimits:
         rows, _ = api.keyset_page(api.MARKETS_PATH, "markets", [], client=client, page_limit=100_000)
         assert rows
 
-    @pytest.mark.parametrize(
-        ("path", "params", "maximum"),
-        [
-            ("/trades", {}, api.TRADES_MAX_ROWS),
-            (
-                "/activity",
-                {"user": "0x0000000000000000000000000000000000000000"},
-                api.ACTIVITY_MAX_ROWS,
-            ),
-        ],
-    )
-    def test_data_history_offset_caps(self, client, path: str, params: dict, maximum: int) -> None:
-        """These hard errors are why the SQL functions cannot promise unlimited history."""
+    def test_data_api_rejects_offset(self, client) -> None:
+        """v2 is cursor-only; even `offset=0` is a 400, which is why none is ever sent."""
         response = client.get(
-            f"{api.data_base_url()}{path}",
-            params={**params, "limit": 1, "offset": maximum + 1},
+            f"{api.data_base_url()}{api.DATA_API_PREFIX}/trades",
+            params={"limit": 1, "offset": 0},
         )
         assert response.status_code == 400
-        assert "max historical" in response.text.lower()
+        assert "cursor" in response.text.lower()
+
+    def test_data_api_rejects_an_oversized_page(self, client) -> None:
+        """Unlike Gamma, v2 does not clamp: past DATA_PAGE_LIMIT is an error."""
+        response = client.get(
+            f"{api.data_base_url()}{api.DATA_API_PREFIX}/trades",
+            params={"limit": api.DATA_PAGE_LIMIT + 1},
+        )
+        assert response.status_code == 400
+
+    def test_the_data_cursor_advances(self, client, busy_market) -> None:
+        first, cursor = api.data_page(
+            "/trades", {"condition": busy_market["conditionId"]}, page_limit=5, client=client
+        )
+        if cursor is None:
+            pytest.skip("the busiest market has five trades or fewer")
+        second, _ = api.data_page(
+            "/trades", {"condition": busy_market["conditionId"]}, cursor=cursor, client=client
+        )
+        key = ("transaction_hash", "token_id", "proxy_wallet", "side", "size")
+        assert second
+        assert not {tuple(r.get(k) for k in key) for r in first} & {
+            tuple(r.get(k) for k in key) for r in second
+        }, "the cursor is re-serving the same page"
 
 
 class TestKeysetCursor:
@@ -192,11 +204,13 @@ class TestIdentifierSplit:
     def test_the_trade_tape_takes_a_condition_id(self, client, busy_market) -> None:
         trades = api.trades(busy_market["conditionId"], limit=5, client=client)
         assert trades
-        assert all(t["conditionId"] == busy_market["conditionId"] for t in trades)
+        assert all(t["condition_id"] == busy_market["conditionId"] for t in trades)
 
-    def test_a_token_id_on_the_trade_tape_is_silently_empty(self, client, busy_token: str) -> None:
-        """The other silent direction."""
-        assert api.trades(busy_token, limit=5, client=client) == []
+    def test_a_token_id_on_the_trade_tape_is_rejected(self, client, busy_token: str) -> None:
+        """v2 made this mistake loud; v1 answered it with `[]` and HTTP 200."""
+        with pytest.raises(api.PolymarketError) as caught:
+            api.trades(busy_token, limit=5, client=client)
+        assert caught.value.status == 400
 
 
 class TestQuoteSides:
@@ -301,7 +315,7 @@ class TestShapes:
         groups = api.holders(busy_market["conditionId"], limit=5, client=client)
         if not groups:
             pytest.skip("no holders reported right now")
-        assert "token" in groups[0] and "holders" in groups[0]
+        assert "token_id" in groups[0] and "holders" in groups[0]
 
     def test_series_excludes_events_when_asked(self, client) -> None:
         rows = api.series_page(client=client)
@@ -317,25 +331,25 @@ class TestPositions:
         groups = api.holders(busy_market["conditionId"], limit=5, client=client)
         for group in groups:
             for holder in group.get("holders") or []:
-                if wallet := holder.get("proxyWallet"):
+                if wallet := holder.get("proxy_wallet"):
                     return str(wallet)
         pytest.skip("no holders reported right now")
 
     def test_a_wallet_has_positions(self, client, a_wallet: str) -> None:
         rows = api.positions(a_wallet, limit=5, client=client)
         assert rows
-        assert all(r["proxyWallet"].lower() == a_wallet.lower() for r in rows)
+        assert all(r["proxy_wallet"].lower() == a_wallet.lower() for r in rows)
 
     def test_a_position_carries_both_market_keys(self, client, a_wallet: str) -> None:
         """Which is what lets positions() feed back into the rest of the catalog."""
         rows = api.positions(a_wallet, limit=1, client=client)
-        assert rows[0]["conditionId"].startswith("0x")
-        assert rows[0]["asset"].isdigit()
+        assert rows[0]["condition_id"].startswith("0x")
+        assert rows[0]["token_id"].isdigit()
 
     def test_prices_are_probabilities(self, client, a_wallet: str) -> None:
         rows = api.positions(a_wallet, limit=10, client=client)
         for row in rows:
-            for key in ("avgPrice", "curPrice"):
+            for key in ("avg_price", "current_price"):
                 value = to_decimal(row.get(key))
                 if value is not None:
                     assert 0 <= value <= 1, f"{key}={value}"
@@ -355,7 +369,7 @@ class TestPositions:
         """
         groups = api.holders(busy_market["conditionId"], limit=3, client=client)
         wallet = next(
-            (h["proxyWallet"] for g in groups for h in (g.get("holders") or []) if h.get("proxyWallet")),
+            (h["proxy_wallet"] for g in groups for h in (g.get("holders") or []) if h.get("proxy_wallet")),
             None,
         )
         if not wallet:
@@ -363,7 +377,7 @@ class TestPositions:
         positions = api.positions(str(wallet), limit=5, client=client)
         assert positions
         for position in positions:
-            condition_id = str(position["conditionId"])
+            condition_id = str(position["condition_id"])
             found = api.markets_by_condition_id([condition_id], client=client)
             if found:
                 assert condition_id in found
@@ -412,14 +426,14 @@ class TestActivity:
     def a_wallet(cls, client, busy_market) -> str:
         for group in api.holders(busy_market["conditionId"], limit=5, client=client):
             for holder in group.get("holders") or []:
-                if wallet := holder.get("proxyWallet"):
+                if wallet := holder.get("proxy_wallet"):
                     return str(wallet)
         pytest.skip("no holders reported right now")
 
     def test_a_wallet_has_activity(self, client, a_wallet: str) -> None:
         rows = api.activity(a_wallet, limit=20, client=client)
         assert rows
-        assert all(r["proxyWallet"].lower() == a_wallet.lower() for r in rows)
+        assert all(r["proxy_wallet"].lower() == a_wallet.lower() for r in rows)
 
     def test_every_type_is_one_we_declare(self, client, a_wallet: str) -> None:
         """The `activity_type` choices must not drift from what the API emits."""

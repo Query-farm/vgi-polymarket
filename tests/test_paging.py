@@ -221,14 +221,81 @@ class TestOffsetPaging:
 
 
 class TestPageLimitGuard:
-    def test_a_runaway_offset_walk_raises_rather_than_truncating(self) -> None:
+    def test_a_runaway_cursor_walk_raises_rather_than_truncating(self) -> None:
         """A short result that looks complete is worse than an error."""
 
         def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json=[{"id": "always-full"}] * 100)
+            return httpx.Response(
+                200,
+                json={"data": [{"id": "always-full"}] * 100, "pagination": {"next_cursor": "again"}},
+            )
 
         with _client(handler) as client, pytest.raises(api.PolymarketPageLimitError):
-            api._offset_all(api.data_base_url(), "/trades", client=client, page_limit=100)
+            api._cursor_all("/trades", client=client, page_limit=100)
+
+
+class TestDataApiCursor:
+    """Data API v2 pages by an opaque cursor and rejects `offset` with HTTP 400."""
+
+    @staticmethod
+    def _pages(seen: list[httpx.Request], pages: list[tuple[list[dict], str | None]]):
+        def handler(request: httpx.Request) -> httpx.Response:
+            rows, cursor = pages[len(seen)]
+            seen.append(request)
+            return httpx.Response(200, json={"data": rows, "pagination": {"next_cursor": cursor}})
+
+        return handler
+
+    def test_routes_are_under_the_v2_prefix(self) -> None:
+        seen: list[httpx.Request] = []
+        with _client(self._pages(seen, [([], None)])) as client:
+            api.trades("0xabc", limit=5, client=client)
+        assert seen[0].url.path == "/v2/trades"
+        assert seen[0].url.params.get("condition") == "0xabc"
+        assert "market" not in seen[0].url.params, "v2 rejects `market` with HTTP 400"
+
+    def test_the_cursor_is_followed_and_filters_are_resent(self) -> None:
+        seen: list[httpx.Request] = []
+        pages = [([{"n": 1}, {"n": 2}], "C1"), ([{"n": 3}, {"n": 4}], "C2"), ([{"n": 5}], None)]
+        with _client(self._pages(seen, pages)) as client:
+            rows = api.activity("0xwallet", activity_type="TRADE", limit=None, client=client)
+        assert [r["n"] for r in rows] == [1, 2, 3, 4, 5]
+        assert [r.url.params.get("cursor") for r in seen] == [None, "C1", "C2"]
+        for request in seen:
+            assert request.url.params.get("user") == "0xwallet"
+            assert request.url.params.get("type") == "TRADE"
+            assert "offset" not in request.url.params, "v2 rejects `offset`, even offset=0"
+
+    def test_limit_is_sent_only_on_the_first_page(self) -> None:
+        """Once a cursor is supplied, the cursor's own page size wins."""
+        seen: list[httpx.Request] = []
+        with _client(self._pages(seen, [([{"n": 1}], "C1"), ([{"n": 2}], None)])) as client:
+            api.positions("0xwallet", limit=None, client=client)
+        assert seen[0].url.params.get("limit") == str(api.DATA_PAGE_LIMIT)
+        assert "limit" not in seen[1].url.params
+
+    def test_a_short_page_with_a_cursor_is_not_the_end(self) -> None:
+        """v2's `has_more` is exact: a short or empty page can still have a successor."""
+        seen: list[httpx.Request] = []
+        with _client(self._pages(seen, [([], "C1"), ([{"n": 1}], None)])) as client:
+            rows = api.trades("0xabc", limit=10, client=client)
+        assert rows == [{"n": 1}]
+
+    def test_the_walk_stops_at_the_requested_limit(self) -> None:
+        seen: list[httpx.Request] = []
+        with _client(self._pages(seen, [([{"n": i} for i in range(3)], "C1")])) as client:
+            rows = api.trades("0xabc", limit=3, client=client)
+        assert len(rows) == 3 and len(seen) == 1
+        assert seen[0].url.params.get("limit") == "3"
+
+    def test_a_null_data_payload_is_an_empty_result(self) -> None:
+        """A documented miss is `data: null`, never an error."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"data": None})
+
+        with _client(handler) as client:
+            assert api.holders("0xabc", limit=5, client=client) == []
 
 
 class TestBatching:

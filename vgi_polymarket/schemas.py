@@ -914,59 +914,71 @@ def flatten_price_history(token_id: str, history: Sequence[dict[str, Any]]) -> l
     return rows
 
 
+#: Data API v2 puts this in ``outcome_index`` when it cannot label the outcome
+#: — on activity not tied to one at all (yield, rebates), for instance. It is a
+#: sentinel, not a position, so it must not reach a consumer as one.
+_NO_OUTCOME = 999
+
+
+def _outcome_index(raw: dict[str, Any]) -> Any:
+    index = raw.get("outcome_index")
+    return None if index == _NO_OUTCOME else index
+
+
 def trade_row(raw: dict[str, Any]) -> dict[str, Any]:
-    """Reshape one Data API trade into this package's column names."""
+    """Reshape one Data API v2 trade into this package's column names."""
     return {
-        "transaction_hash": raw.get("transactionHash"),
-        "condition_id": raw.get("conditionId"),
-        "token_id": raw.get("asset"),
+        "transaction_hash": raw.get("transaction_hash"),
+        "condition_id": raw.get("condition_id"),
+        "token_id": raw.get("token_id"),
         "outcome": raw.get("outcome"),
-        "outcome_index": raw.get("outcomeIndex"),
+        "outcome_index": _outcome_index(raw),
         "side": raw.get("side"),
         "price": raw.get("price"),
         "size": raw.get("size"),
         "ts": raw.get("timestamp"),
-        "proxy_wallet": raw.get("proxyWallet"),
+        "proxy_wallet": raw.get("proxy_wallet"),
         "trader_name": raw.get("name"),
         "pseudonym": raw.get("pseudonym"),
         "title": raw.get("title"),
-        "event_slug": raw.get("eventSlug"),
+        "event_slug": raw.get("event_slug"),
     }
 
 
 def position_row(raw: dict[str, Any]) -> dict[str, Any]:
-    """Reshape one Data API position into this package's column names.
+    """Reshape one Data API v2 position into this package's column names.
+
+    The column names predate v2 and are kept; v2 renamed several fields
+    (``current_size``, ``current_price``, ``entry_cost_usdc``, ``unrealized_pnl``,
+    ``total_size``) without changing what they measure.
 
     ``percent_pnl`` arrives as a percentage (``-44.5128``), not a fraction, so
     it is carried as-is rather than divided — the column comment says so, and
     silently rescaling it would make it disagree with Polymarket's own display.
+    ``end_date`` is ``1970-01-01`` when Gamma has no end date, which is a
+    sentinel rather than a date, so it becomes NULL.
     """
+    end_date = raw.get("end_date")
     return {
-        "proxy_wallet": raw.get("proxyWallet"),
-        "condition_id": raw.get("conditionId"),
-        "token_id": raw.get("asset"),
+        "proxy_wallet": raw.get("proxy_wallet"),
+        "condition_id": raw.get("condition_id"),
+        "token_id": raw.get("token_id"),
         "outcome": raw.get("outcome"),
-        "outcome_index": raw.get("outcomeIndex"),
+        "outcome_index": _outcome_index(raw),
         "title": raw.get("title"),
-        "event_slug": raw.get("eventSlug"),
-        "size": raw.get("size"),
-        "avg_price": raw.get("avgPrice"),
-        "cur_price": raw.get("curPrice"),
-        "initial_value": raw.get("initialValue"),
-        "current_value": raw.get("currentValue"),
-        "cash_pnl": raw.get("cashPnl"),
-        "percent_pnl": raw.get("percentPnl"),
-        "realized_pnl": raw.get("realizedPnl"),
-        "total_bought": raw.get("totalBought"),
+        "event_slug": raw.get("event_slug"),
+        "size": raw.get("current_size"),
+        "avg_price": raw.get("avg_price"),
+        "cur_price": raw.get("current_price"),
+        "initial_value": raw.get("entry_cost_usdc"),
+        "current_value": raw.get("current_value"),
+        "cash_pnl": raw.get("unrealized_pnl"),
+        "percent_pnl": raw.get("percent_pnl"),
+        "realized_pnl": raw.get("realized_pnl"),
+        "total_bought": raw.get("total_size"),
         "redeemable": raw.get("redeemable"),
-        "end_date": raw.get("endDate"),
+        "end_date": None if end_date == "1970-01-01" else end_date,
     }
-
-
-#: The Data API uses this in `outcomeIndex` for activity that is not tied to an
-#: outcome at all (yield, rebates). It is a sentinel, not a position, so it must
-#: not reach a consumer as one.
-_NO_OUTCOME = 999
 
 
 def _blank_to_none(value: Any) -> Any:
@@ -981,25 +993,24 @@ def _blank_to_none(value: Any) -> Any:
 
 
 def activity_row(raw: dict[str, Any]) -> dict[str, Any]:
-    """Reshape one Data API activity entry into this package's column names."""
-    index = raw.get("outcomeIndex")
+    """Reshape one Data API v2 activity entry into this package's column names."""
     return {
-        "proxy_wallet": raw.get("proxyWallet"),
+        "proxy_wallet": raw.get("proxy_wallet"),
         "ts": raw.get("timestamp"),
         "activity_type": _blank_to_none(raw.get("type")),
-        "condition_id": _blank_to_none(raw.get("conditionId")),
-        "token_id": _blank_to_none(raw.get("asset")),
+        "condition_id": _blank_to_none(raw.get("condition_id")),
+        "token_id": _blank_to_none(raw.get("token_id")),
         "outcome": _blank_to_none(raw.get("outcome")),
-        "outcome_index": None if index == _NO_OUTCOME else index,
+        "outcome_index": _outcome_index(raw),
         "side": _blank_to_none(raw.get("side")),
         # A non-trade row reports price 0, which is a real price for a market
         # that is not going to happen — so it is nulled rather than carried.
         "price": raw.get("price") if raw.get("type") == "TRADE" else None,
         "size": raw.get("size"),
-        "usdc_size": raw.get("usdcSize"),
-        "transaction_hash": raw.get("transactionHash"),
+        "usdc_size": raw.get("usdc_size"),
+        "transaction_hash": raw.get("transaction_hash"),
         "title": _blank_to_none(raw.get("title")),
-        "event_slug": _blank_to_none(raw.get("eventSlug")),
+        "event_slug": _blank_to_none(raw.get("event_slug")),
         "trader_name": _blank_to_none(raw.get("name")),
         "pseudonym": _blank_to_none(raw.get("pseudonym")),
     }
@@ -1008,25 +1019,24 @@ def activity_row(raw: dict[str, Any]) -> dict[str, Any]:
 def flatten_holders(condition_id: str, payload: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """Flatten the Data API's per-token holder groups into one row per holder.
 
-    The response is a list of ``{"token": ..., "holders": [...]}`` groups. The
-    token id lives on the group rather than on each holder, so it is stamped
-    down onto every row — otherwise a holder row could not say which outcome it
-    is a position in.
+    The response is a list of ``{"token_id": ..., "holders": [...]}`` groups.
+    The token id is authoritative on the group, so it is stamped down onto every
+    row — otherwise a holder row could not say which outcome it is a position in.
     """
     rows: list[dict[str, Any]] = []
     for group in payload:
         if not isinstance(group, dict):
             continue
-        token_id = group.get("token")
+        token_id = group.get("token_id")
         for holder in group.get("holders") or []:
             if not isinstance(holder, dict):
                 continue
             rows.append(
                 {
                     "condition_id": condition_id,
-                    "token_id": token_id or holder.get("asset"),
-                    "outcome_index": holder.get("outcomeIndex"),
-                    "proxy_wallet": holder.get("proxyWallet"),
+                    "token_id": token_id or holder.get("token_id"),
+                    "outcome_index": _outcome_index(holder),
+                    "proxy_wallet": holder.get("proxy_wallet"),
                     "amount": holder.get("amount"),
                     "holder_name": holder.get("name"),
                     "pseudonym": holder.get("pseudonym"),
