@@ -625,3 +625,7 @@ connector reads their public APIs and adds nothing to them but a SQL interface.
 - [VGI](https://query.farm/vgi/) — the protocol this connector speaks
 - [vgi-python](https://github.com/Query-farm/vgi-python) — the reference implementation it is built on
 - [vgi-lint](https://github.com/Query-farm/vgi-lint-check) — the catalog-metadata linter it is checked by
+
+## Executed notebook
+
+[Price the displayed depth at size](notebooks/README.md) uses recorded public books to compare hypothetical fill price, depth and uncovered shares, with a separate size experiment.

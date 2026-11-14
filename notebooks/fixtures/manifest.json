@@ -1,0 +1,62 @@
+{
+  "kind": "actual complete public API response bodies, no synthetic fallback",
+  "condition_id": "0x6cd1330980f778692947d0ef31f533b0375046b335c8845ca265c8c42d8db753",
+  "question": "Counter-Strike: Spirit vs MOUZ (BO3) - BLAST Rivals Playoffs",
+  "tokens": [
+    "111680827873875446130715877279434973292760534154578428684750586584871589809774",
+    "35243610203114140475638716555852668946467974164967105956078357552772356445150"
+  ],
+  "entries": [
+    {
+      "filename": "market.json",
+      "method": "GET",
+      "url": "https://gamma-api.polymarket.com/markets/keyset?limit=100&condition_ids=0x6cd1330980f778692947d0ef31f533b0375046b335c8845ca265c8c42d8db753",
+      "request_json": null,
+      "started_utc": "2026-11-14T09:27:18.269332+00:00",
+      "received_utc": "2026-11-14T09:27:19.084784+00:00",
+      "status": 200,
+      "bytes": 9700,
+      "sha256": "f37bac62bb790cb66800cfaa406315c62a36fd9bd7754e25e83da3fc69cc8e69",
+      "content_type": "application/json",
+      "source_date": "Sat, 14 Nov 2026 09:27:19 GMT",
+      "cache_control": "public, max-age=300"
+    },
+    {
+      "filename": "book-0.json",
+      "method": "POST",
+      "url": "https://clob.polymarket.com/books",
+      "request_json": [
+        {
+          "token_id": "111680827873875446130715877279434973292760534154578428684750586584871589809774"
+        }
+      ],
+      "started_utc": "2026-11-14T09:27:19.085565+00:00",
+      "received_utc": "2026-11-14T09:27:19.423541+00:00",
+      "status": 200,
+      "bytes": 3528,
+      "sha256": "46bb364e426ee51744bb76be3716f1464546f59331d73a4124e199285671d593",
+      "content_type": "application/json",
+      "source_date": "Sat, 14 Nov 2026 09:27:19 GMT",
+      "cache_control": null
+    },
+    {
+      "filename": "book-1.json",
+      "method": "POST",
+      "url": "https://clob.polymarket.com/books",
+      "request_json": [
+        {
+          "token_id": "35243610203114140475638716555852668946467974164967105956078357552772356445150"
+        }
+      ],
+      "started_utc": "2026-11-14T09:27:19.424137+00:00",
+      "received_utc": "2026-11-14T09:27:19.781912+00:00",
+      "status": 200,
+      "bytes": 3527,
+      "sha256": "aeb59e8c54182686b0000f9e8cdf95c80b491782dee98f5c424ec664af1e9903",
+      "content_type": "application/json",
+      "source_date": "Sat, 14 Nov 2026 09:27:19 GMT",
+      "cache_control": null
+    }
+  ],
+  "selection": "First result of bounded 10-row discovery request sorted volume24hr descending, closed=false active=true; illustration, not representative sample."
+}
