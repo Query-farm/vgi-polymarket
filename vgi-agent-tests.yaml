@@ -159,7 +159,9 @@ tasks:
     unordered: true
   - name: tape_vs_touch
     # Composes markets(), trades() and quote(). The grader recomputes both numbers live for the three
-    # busiest markets and allows 0.05 of drift; a last_trade_price or an unweighted guess fails it.
+    # busiest markets and allows 0.05 of drift; a market's last_trade_price or a shifted midpoint
+    # fails it. An unweighted average of the same tape usually lands inside that tolerance, so the
+    # size weighting is judged by success_criteria rather than by the check.
     check_sql: >-
       WITH m AS (SELECT condition_id, outcomes FROM polymarket.main.markets(closed => 'false',
       order_by => 'volume24hr', ascending => 'false') LIMIT 3), tape AS (SELECT t.token_id,
