@@ -378,6 +378,31 @@ class TestOtherFlattening:
         assert batch.column("price").to_pylist() == [Decimal("0.955000")]
         assert batch.column("size").to_pylist() == [Decimal("100.000000")]
 
+    def test_a_computed_fill_price_rounds_to_its_tick_instead_of_vanishing(self) -> None:
+        """The Data API derives a fill's price as usdc/size, so 0.39 arrives as 0.3899999976.
+
+        Under the exact-or-NULL price policy that value does not fit DECIMAL(18,6),
+        and about half of a busy market's tape came back with a NULL price.
+        """
+        from vgi_polymarket.schemas import ACTIVITY_SCHEMA, activity_row, trade_row
+
+        trades = batch_from_rows(
+            [trade_row({"transaction_hash": "0x1", "price": 0.3899999976, "size": 128.205129})],
+            TRADE_SCHEMA,
+        )
+        assert trades.column("price").to_pylist() == [Decimal("0.390000")]
+        activity = batch_from_rows(
+            [activity_row({"type": "TRADE", "price": 0.6199999918, "size": 39.241936})],
+            ACTIVITY_SCHEMA,
+        )
+        assert activity.column("price").to_pylist() == [Decimal("0.620000")]
+
+    def test_a_fill_price_that_is_not_a_number_is_still_null(self) -> None:
+        from vgi_polymarket.schemas import trade_row
+
+        assert trade_row({"price": "NaN"})["price"] is None
+        assert trade_row({})["price"] is None
+
 
 class TestFillPrice:
     """Walking the book turns a spread into a cost.

@@ -6,6 +6,8 @@ import json
 import re
 from pathlib import Path
 
+import yaml
+
 from vgi_polymarket.markets import (
     EventFunction,
     EventMarketsFunction,
@@ -28,6 +30,16 @@ from vgi_polymarket.trading import (
 from vgi_polymarket.worker import _POLYMARKET_CATALOG
 
 PACKAGE = Path(__file__).resolve().parent.parent / "vgi_polymarket"
+
+#: The private graders for the catalog's public agent tasks; vgi-lint reads this
+#: file from beside ``vgi-lint.toml``.
+AGENT_TESTS = PACKAGE.parent / "vgi-agent-tests.yaml"
+
+
+def _graders() -> list[dict]:
+    """The private side of the agent suite, one entry per public task."""
+    return list(yaml.safe_load(AGENT_TESTS.read_text())["tasks"])
+
 
 #: Bounded fetches: one market, one book, one price curve. These stay blended,
 #: so they compose as the inner side of a correlated LATERAL.
@@ -342,9 +354,9 @@ def _shipped_sql() -> list[str]:
 
 
 def _agent_task_sql() -> list[str]:
-    """Every reference query in the agent-suitability suite."""
+    """Every grader query in the agent-suitability suite."""
     out: list[str] = []
-    for task in json.loads(_POLYMARKET_CATALOG.tags["vgi.agent_test_tasks"]):
+    for task in _graders():
         if sql := task.get("reference_sql"):
             out.extend(sql if isinstance(sql, list) else [sql])
         if check := task.get("check_sql"):
@@ -537,11 +549,26 @@ class TestAgentTasks:
     """
 
     @staticmethod
-    def _tasks() -> list[dict]:
+    def _public() -> list[dict]:
         return json.loads(_POLYMARKET_CATALOG.tags["vgi.agent_test_tasks"])
 
+    @staticmethod
+    def _tasks() -> list[dict]:
+        return _graders()
+
     def test_there_are_tasks(self) -> None:
-        assert len(self._tasks()) >= 10
+        assert len(self._public()) >= 10
+
+    def test_the_catalog_publishes_only_name_and_prompt(self) -> None:
+        """A grader in the catalog is the agent's answer key (vgi-lint VGI416)."""
+        offenders = [t["name"] for t in self._public() if set(t) != {"name", "prompt"}]
+        assert offenders == [], offenders
+
+    def test_every_public_task_has_exactly_one_grader(self) -> None:
+        public = [t["name"] for t in self._public()]
+        graded = [t["name"] for t in self._tasks()]
+        assert sorted(public) == sorted(graded)
+        assert len(set(graded)) == len(graded)
 
     def test_every_task_is_graded_by_an_invariant(self) -> None:
         missing = [t["name"] for t in self._tasks() if not t.get("check_sql")]

@@ -51,6 +51,7 @@ serve = ["vgi-python[http,haybarn,oauth]>=0.51.1", "vgi-rpc[sentry]>=0.53.1"]
 [dependency-groups]
 dev = [
     "pytest>=9",
+    "pyyaml>=6.0.3",
     "ruff>=0.16",
 ]
 

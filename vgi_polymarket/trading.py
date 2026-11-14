@@ -65,6 +65,42 @@ from vgi_polymarket.schemas import (
     trade_row,
 )
 
+#: Composed examples: each joins two of this module's functions, driven from
+#: ``markets()``. Defined once and referenced from the function's own example
+#: list and from the schema-level list in :mod:`vgi_polymarket.worker`.
+HOLDERS_MARKED_TO_MARKET = (
+    "What the busiest open market's largest holders' stakes are worth at each outcome's live midpoint",
+    (
+        "SELECT h.outcome_index, h.holder_name, h.amount, q.midpoint, "
+        "h.amount * q.midpoint AS marked_value FROM ("
+        "SELECT condition_id FROM polymarket.main.markets("
+        "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
+        "LATERAL polymarket.main.holders(m.condition_id, 20) h, "
+        "LATERAL polymarket.main.quote(h.token_id) q "
+        "ORDER BY marked_value DESC"
+    ),
+)
+
+WEEKLY_MOVERS = (
+    (
+        "This week's movers: each outcome of the five busiest open markets, from the first "
+        "point of its past-week hourly history to its live midpoint"
+    ),
+    (
+        "WITH tokens AS (SELECT m.question, o.outcome, o.token_id FROM ("
+        "SELECT question, outcomes FROM polymarket.main.markets(closed => 'false', "
+        "order_by => 'volume24hr', ascending => 'false') LIMIT 5) m, "
+        "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o), "
+        "week AS (SELECT t.question, t.outcome, t.token_id, arg_min(h.price, h.ts) AS first_price "
+        "FROM tokens t, LATERAL polymarket.main.price_history(t.token_id, '1w', 60) h "
+        "GROUP BY t.question, t.outcome, t.token_id) "
+        "SELECT w.question, w.outcome, w.first_price, q.midpoint, "
+        "q.midpoint - w.first_price AS change "
+        "FROM week w, LATERAL polymarket.main.quote(w.token_id) q "
+        "ORDER BY abs(change) DESC NULLS LAST, w.question, w.outcome"
+    ),
+)
+
 
 @dataclass(slots=True, frozen=True, kw_only=True)
 class TokenArgs:
@@ -269,10 +305,12 @@ class QuoteFunction(RowTransformFunction[TokenArgs]):
                     ),
                 ),
                 (
-                    "The widest spreads among busy markets — where liquidity is thin",
+                    "The widest spreads among the 50 busiest open markets — where liquidity is thin",
                     (
-                        "SELECT m.question, o.outcome, q.spread FROM polymarket.main.markets("
-                        "closed => 'false', order_by => 'volume24hr', ascending => 'false') m, "
+                        "SELECT m.question, o.outcome, q.spread FROM ("
+                        "SELECT question, outcomes FROM polymarket.main.markets("
+                        "closed => 'false', order_by => 'volume24hr', ascending => 'false') "
+                        "LIMIT 50) m, "
                         "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
                         "LATERAL polymarket.main.quote(o.token_id) q "
                         "WHERE q.spread IS NOT NULL ORDER BY q.spread DESC LIMIT 20"
@@ -435,6 +473,7 @@ class PriceHistoryFunction(RowTransformFunction[PriceHistoryArgs]):
                         "GROUP BY o.outcome ORDER BY swing DESC"
                     ),
                 ),
+                WEEKLY_MOVERS,
             ),
         )
         examples = [
@@ -448,6 +487,7 @@ class PriceHistoryFunction(RowTransformFunction[PriceHistoryArgs]):
                 ),
                 description="A week of hourly implied probability for the busiest open market",
             ),
+            FunctionExample(sql=WEEKLY_MOVERS[1], description=WEEKLY_MOVERS[0]),
         ]
 
     @classmethod
@@ -713,6 +753,7 @@ class HoldersFunction(RowTransformFunction[HoldersArgs]):
                         "LATERAL polymarket.main.holders(m.condition_id, 20) h GROUP BY h.token_id"
                     ),
                 ),
+                HOLDERS_MARKED_TO_MARKET,
             ),
         )
         examples = [
@@ -726,6 +767,7 @@ class HoldersFunction(RowTransformFunction[HoldersArgs]):
                 ),
                 description="The biggest positions in the busiest open market",
             ),
+            FunctionExample(sql=HOLDERS_MARKED_TO_MARKET[1], description=HOLDERS_MARKED_TO_MARKET[0]),
         ]
 
     @classmethod

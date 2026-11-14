@@ -29,7 +29,7 @@ from vgi_polymarket.markets import MARKET_FUNCTIONS
 from vgi_polymarket.meta import column_comments, docs, examples, keywords
 from vgi_polymarket.reference import REFERENCE_FUNCTIONS, AllSeriesFunction, AllTagsFunction
 from vgi_polymarket.schemas import SERIES_SCHEMA, TAG_SCHEMA
-from vgi_polymarket.trading import TRADING_FUNCTIONS
+from vgi_polymarket.trading import HOLDERS_MARKED_TO_MARKET, TRADING_FUNCTIONS, WEEKLY_MOVERS
 
 IMPLEMENTATION_VERSION = __version__
 DATA_VERSION_SPEC = f"=={__version__}"
@@ -88,6 +88,7 @@ _EXAMPLE_QUERIES = examples(
             "ORDER BY h.ts"
         ),
     ),
+    WEEKLY_MOVERS,
     (
         "The most recent prints on the busiest open market, with who traded",
         (
@@ -106,6 +107,7 @@ _EXAMPLE_QUERIES = examples(
             "LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC"
         ),
     ),
+    HOLDERS_MARKED_TO_MARKET,
     (
         "Follow the biggest holder in a busy market to everything else they hold",
         (
@@ -143,13 +145,15 @@ _EXAMPLE_QUERIES = examples(
         ),
     ),
     (
-        "Pre-fee displayed-book cost of 5,000 shares, against what the touch advertises",
+        "Pre-fee displayed-book cost of 5,000 shares in the ten busiest open markets, against what the touch advertises",
         (
             "SELECT m.question, o.outcome, q.midpoint, f.avg_price, f.slippage, f.fully_filled "
-            "FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', "
-            "ascending => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
+            "FROM (SELECT question, outcomes, volume_24hr FROM polymarket.main.markets("
+            "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 10) m, "
+            "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, "
             "LATERAL polymarket.main.quote(o.token_id) q, "
-            "LATERAL polymarket.main.fill_price(o.token_id, 'buy', 5000) f LIMIT 20"
+            "LATERAL polymarket.main.fill_price(o.token_id, 'buy', 5000) f "
+            "ORDER BY m.volume_24hr DESC, o.outcome_index"
         ),
     ),
     (
@@ -292,31 +296,16 @@ _EXECUTABLE_EXAMPLES = json.dumps(
 #: the catalog metadata alone. They are written to exercise the things this
 #: worker is easy to get wrong — above all, which of the two identifiers a given
 #: function takes.
-#: The agent-suitability suite: tasks an analyst should be able to complete from
-#: the catalog metadata alone. They are written to exercise the things this
-#: worker is easy to get wrong — above all, which of the two identifiers a given
-#: function takes.
 #:
-#: Each task is graded by ``check_sql``, an invariant that must hold over the
-#: object the task is about, rather than by ``reference_sql``. That is a
-#: deliberate choice forced by the data: a reference query is graded by exact
-#: result-set equality against the analyst's answer, and every interesting
-#: question here is about live prices, volumes and order books that move between
-#: the two executions — so a reference comparison would fail even for a perfect
-#: answer. The invariants below are real properties of this worker (prices are
-#: probabilities, an ask is never below a bid, a book side is labelled), so they
-#: test something rather than merely passing.
+#: Only each task's public name and prompt ship in the catalog. The graders —
+#: ``check_sql`` and ``success_criteria`` — are private and live in
+#: ``vgi-agent-tests.yaml``, which ``vgi-lint`` reads beside ``vgi-lint.toml``;
+#: a grader published in the catalog would hand the agent its own answer key.
 _AGENT_TEST_TASKS = json.dumps(
     [
         {
             "name": "find_a_topic",
-            "prompt": "What topics does Polymarket cover for crypto? Give me a tag id I can filter on.",
-            "check_sql": (
-                "SELECT count(*) > 0 FROM (SELECT tag_id FROM polymarket.main.tags "
-                "WHERE label ILIKE '%crypto%' LIMIT 5)"
-            ),
-            "success_criteria": "Finds tag ids by searching the tags table, rather than guessing one.",
-            "unordered": True,
+            "prompt": ("What topics does Polymarket cover for crypto? Give me a tag id I can filter on."),
         },
         {
             "name": "busiest_markets",
@@ -324,50 +313,16 @@ _AGENT_TEST_TASKS = json.dumps(
                 "Which Polymarket markets are busiest right now, and what probability does each "
                 "outcome imply?"
             ),
-            "check_sql": (
-                "SELECT bool_and(o.price BETWEEN 0 AND 1) IS NOT FALSE FROM ("
-                "SELECT outcomes FROM polymarket.main.markets(closed => 'false', "
-                "order_by => 'volume24hr', ascending => 'false') LIMIT 20) m, "
-                "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o WHERE o.price IS NOT NULL"
-            ),
-            "success_criteria": (
-                "Uses markets() with an order_by argument rather than scanning and sorting the "
-                "whole catalog, and reads prices as probabilities between 0 and 1."
-            ),
-            "unordered": True,
         },
         {
             "name": "order_book_for_an_outcome",
             "prompt": ("Show me the resting order book for one outcome of any busy open Polymarket market."),
-            "check_sql": (
-                "SELECT bool_and(b.side IN ('bid', 'ask')) IS NOT FALSE FROM ("
-                "SELECT o.token_id FROM polymarket.main.markets(closed => 'false', "
-                "order_by => 'volume24hr', ascending => 'false') m, "
-                "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 3) t, "
-                "LATERAL polymarket.main.orderbook(t.token_id) b"
-            ),
-            "success_criteria": (
-                "Passes a token_id from the outcomes list to orderbook(). Passing a condition_id "
-                "is wrong — the order book keys on the outcome token, not the market."
-            ),
-            "unordered": True,
         },
         {
             "name": "price_history_for_an_outcome",
             "prompt": (
-                "Chart how the probability of one outcome of a busy Polymarket market moved over "
-                "the last week."
-            ),
-            "check_sql": (
-                "SELECT bool_and(h.price BETWEEN 0 AND 1) IS NOT FALSE FROM ("
-                "SELECT o.token_id FROM polymarket.main.markets(closed => 'false', "
-                "order_by => 'volume24hr', ascending => 'false') m, "
-                "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, "
-                "LATERAL polymarket.main.price_history(t.token_id, '1w', 60) h"
-            ),
-            "success_criteria": (
-                "Passes a token_id to price_history(). A condition_id returns an empty series "
-                "with no error, so getting this wrong looks like a market that never traded."
+                "Chart how the probability of one outcome of a busy Polymarket market moved "
+                "over the last week."
             ),
         },
         {
@@ -376,59 +331,20 @@ _AGENT_TEST_TASKS = json.dumps(
                 "What were the last few trades on the busiest open Polymarket market, and who "
                 "was on the other side?"
             ),
-            "check_sql": (
-                "SELECT bool_and(t.price BETWEEN 0 AND 1 AND t.side IN ('BUY','SELL')) IS NOT FALSE "
-                "FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false', "
-                "order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                "LATERAL polymarket.main.trades(m.condition_id, 100, '') t"
-            ),
-            "success_criteria": (
-                "Passes a condition_id to trades() — NOT a token_id, which returns an empty "
-                "list — and reads the trader columns for who traded."
-            ),
-            "unordered": True,
         },
         {
             "name": "who_holds_the_position",
             "prompt": "Who holds the largest positions in the busiest open Polymarket market?",
-            "check_sql": (
-                "SELECT bool_and(h.amount > 0) IS NOT FALSE FROM ("
-                "SELECT condition_id FROM polymarket.main.markets(closed => 'false', "
-                "order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                "LATERAL polymarket.main.holders(m.condition_id, 20) h"
-            ),
-            "success_criteria": "Uses holders() with a condition_id and ranks by amount.",
-            "unordered": True,
         },
         {
             "name": "live_quote",
             "prompt": (
                 "What is the current bid, ask and midpoint for one outcome of a busy open Polymarket market?"
             ),
-            "check_sql": (
-                "SELECT bool_and(q.best_ask >= q.best_bid) IS NOT FALSE FROM ("
-                "SELECT o.token_id FROM polymarket.main.markets(closed => 'false', "
-                "order_by => 'volume24hr', ascending => 'false') m, "
-                "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 3) t, "
-                "LATERAL polymarket.main.quote(t.token_id) q"
-            ),
-            "success_criteria": (
-                "Uses quote() for the point read rather than aggregating the whole order book."
-            ),
         },
         {
             "name": "markets_under_an_event",
             "prompt": ("Take the biggest open event on Polymarket. What individual markets sit under it?"),
-            "check_sql": (
-                "SELECT count(*) > 0 FROM (SELECT event_id FROM polymarket.main.events("
-                "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) e, "
-                "LATERAL polymarket.main.event_markets(e.event_id) m"
-            ),
-            "success_criteria": (
-                "Uses event_markets(). markets() has no event filter, so trying to pass one "
-                "there would silently return unrelated markets."
-            ),
-            "unordered": True,
         },
         {
             "name": "the_event_behind_a_market",
@@ -436,61 +352,24 @@ _AGENT_TEST_TASKS = json.dumps(
                 "Pick the busiest open market on Polymarket. What event does it belong to, and "
                 "when does that event resolve?"
             ),
-            "check_sql": (
-                "SELECT count(*) > 0 FROM (SELECT event_id FROM polymarket.main.markets("
-                "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                "LATERAL polymarket.main.event(m.event_id) e"
-            ),
-            "success_criteria": (
-                "Uses event() with the event_id carried on the market row, rather than trying to "
-                "filter events() by a correlated column."
-            ),
         },
         {
             "name": "the_question_behind_an_id",
             "prompt": (
-                "Given only a Polymarket condition id, what question does that market ask and how "
-                "much has it traded?"
-            ),
-            "check_sql": (
-                "SELECT count(*) > 0 FROM (SELECT condition_id FROM polymarket.main.markets("
-                "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) t, "
-                "LATERAL polymarket.main.market(t.condition_id) m WHERE m.question IS NOT NULL"
-            ),
-            "success_criteria": (
-                "Uses the point lookup market() for a known condition_id rather than scanning "
-                "the catalog again with markets()."
+                "Given only a Polymarket condition id, what question does that market ask and "
+                "how much has it traded?"
             ),
         },
         {
             "name": "recurring_series",
-            "prompt": "Which recurring question series does Polymarket run, and how often do they recur?",
-            "check_sql": (
-                "SELECT count(*) > 0 FROM (SELECT slug FROM polymarket.main.series "
-                "WHERE recurrence IS NOT NULL LIMIT 20)"
-            ),
-            "success_criteria": (
-                "Uses the series table and reads the recurrence column, rather than inferring "
-                "cadence from market titles."
-            ),
-            "unordered": True,
+            "prompt": ("Which recurring question series does Polymarket run, and how often do they recur?"),
         },
         {
             "name": "count_the_catalogs",
             "prompt": (
-                "How many topics and how many recurring series does Polymarket list? A sample of "
-                "each is fine."
+                "How many topics and how many recurring series does Polymarket list? A sample "
+                "of each is fine."
             ),
-            "check_sql": (
-                "SELECT (SELECT count(*) FROM (SELECT tag_id FROM polymarket.main.all_tags() "
-                "LIMIT 100)) = (SELECT count(*) FROM (SELECT series_id FROM "
-                "polymarket.main.all_series() LIMIT 100))"
-            ),
-            "success_criteria": (
-                "Counts through the tags/series tables or the all_tags()/all_series() scans "
-                "behind them, and bounds the scan rather than walking the whole catalog."
-            ),
-            "unordered": True,
         },
         {
             "name": "follow_a_trader",
@@ -498,35 +377,13 @@ _AGENT_TEST_TASKS = json.dumps(
                 "Find the largest holder in the busiest open Polymarket market, then show me "
                 "everything else that wallet is holding and how it is doing."
             ),
-            "check_sql": (
-                "SELECT bool_and(p.avg_price BETWEEN 0 AND 1) IS NOT FALSE FROM ("
-                "SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets("
-                "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                "LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC LIMIT 1) w, "
-                "LATERAL polymarket.main.positions(w.proxy_wallet, 100) p"
-            ),
-            "success_criteria": (
-                "Chains holders() to positions(): holders() takes a condition_id and yields "
-                "wallets, positions() takes a wallet address — a third key, distinct from both "
-                "market identifiers."
-            ),
-            "unordered": True,
         },
         {
             "name": "find_markets_by_subject",
             "prompt": (
-                "I want Polymarket markets about the Federal Reserve. Find them and show me what "
-                "is tradeable."
+                "I want Polymarket markets about the Federal Reserve. Find them and show me "
+                "what is tradeable."
             ),
-            "check_sql": (
-                "SELECT count(*) > 0 FROM (SELECT event_id FROM "
-                "polymarket.main.search('federal reserve') LIMIT 5)"
-            ),
-            "success_criteria": (
-                "Uses search() for a subject given in words. Filtering markets() or events() on "
-                "a title predicate cannot be pushed down and pages the whole catalog instead."
-            ),
-            "unordered": True,
         },
         {
             "name": "how_a_position_was_built",
@@ -534,19 +391,6 @@ _AGENT_TEST_TASKS = json.dumps(
                 "Take the largest holder in the busiest open Polymarket market. How did they "
                 "build that position over time?"
             ),
-            "check_sql": (
-                "SELECT bool_and(a.activity_type IS NOT NULL) IS NOT FALSE FROM ("
-                "SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets("
-                "closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, "
-                "LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC LIMIT 1) w, "
-                "LATERAL polymarket.main.activity(w.proxy_wallet, 500, '') a"
-            ),
-            "success_criteria": (
-                "Uses activity() for history, not positions() (which is only the current "
-                "holding) and not trades() (which is keyed on a market, not a wallet). Filters "
-                "to TRADE entries, since most of a long-lived wallet's feed is yield accrual."
-            ),
-            "unordered": True,
         },
         {
             "name": "what_size_actually_costs",
@@ -554,19 +398,6 @@ _AGENT_TEST_TASKS = json.dumps(
                 "The spread on a Polymarket outcome looks tight. What is the pre-fee "
                 "displayed-book cost of 5,000 shares, and would the book even fill it?"
             ),
-            "check_sql": (
-                "SELECT bool_and(f.slippage >= 0) IS NOT FALSE FROM ("
-                "SELECT o.token_id FROM polymarket.main.markets(closed => 'false', "
-                "order_by => 'volume24hr', ascending => 'false') m, "
-                "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 3) t, "
-                "LATERAL polymarket.main.fill_price(t.token_id, 'buy', 5000) f"
-            ),
-            "success_criteria": (
-                "Uses fill_price() rather than reading the spread from quote(). A tight spread "
-                "says nothing about the size behind it; avg_price is the pre-fee price implied "
-                "by displayed liquidity."
-            ),
-            "unordered": True,
         },
         {
             "name": "topic_wide_liquidity",
@@ -574,17 +405,23 @@ _AGENT_TEST_TASKS = json.dumps(
                 "Across open crypto markets on Polymarket, how much size is resting on each "
                 "side of the books?"
             ),
-            "check_sql": (
-                "SELECT count(DISTINCT b.side) <= 2 FROM (SELECT o.token_id FROM "
-                "polymarket.main.markets(tag_id => '21', closed => 'false') m, "
-                "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 10) t, "
-                "LATERAL polymarket.main.orderbook(t.token_id) b"
+        },
+        {
+            "name": "tape_vs_touch",
+            "prompt": (
+                "On the busiest open Polymarket market by 24-hour volume, how does the "
+                "volume-weighted average price of its last 200 trades compare with each "
+                "outcome's live midpoint? Save one row per outcome as a table named "
+                "tape_vs_touch with columns token_id, vwap and midpoint."
             ),
-            "success_criteria": (
-                "Drives orderbook() from markets() through the outcomes list, filtering by "
-                "tag_id rather than scanning the whole catalog."
+        },
+        {
+            "name": "odds_under_a_searched_event",
+            "prompt": (
+                "Search Polymarket for active events about the Federal Reserve and take the top "
+                "result. What live odds does each market under it give for Yes? Save the answer "
+                "as a table named fed_odds with columns question and midpoint."
             ),
-            "unordered": True,
         },
     ]
 )
@@ -633,6 +470,7 @@ _CATALOG_TAGS = {
     "provider": "polymarket",
     "domain": "prediction-markets",
     "vgi.title": "Polymarket Prediction Markets",
+    "vgi.subtitle": "Live odds, order books, trades and on-chain holders, read-only",
     "vgi.source_url": SOURCE_URL,
     "vgi.author": "Query Farm LLC <hello@query.farm> - https://query.farm",
     "vgi.copyright": (

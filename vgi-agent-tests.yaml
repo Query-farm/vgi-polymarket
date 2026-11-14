@@ -1,0 +1,189 @@
+# Private graders for the public vgi.agent_test_tasks in the worker's catalog metadata
+# (vgi_polymarket/worker.py keeps only each task's name and prompt there).
+# `vgi-lint lint --ai` runs an agent on each prompt and grades it here (VGI920).
+#
+# Every question is about live prices, books and holders that move between the agent's
+# query and the grader's, so nothing is graded by exact reference_sql equality. Older tasks
+# assert an invariant of the object the task is about; tasks that ask the agent to save
+# its answer in a table are graded by recomputing that answer live, within a tolerance.
+tasks:
+  - name: find_a_topic
+    check_sql: >-
+      SELECT count(*) > 0 FROM (SELECT tag_id FROM polymarket.main.tags WHERE label ILIKE '%crypto%'
+      LIMIT 5)
+    success_criteria: >-
+      Finds tag ids by searching the tags table, rather than guessing one.
+    unordered: true
+  - name: busiest_markets
+    check_sql: >-
+      SELECT bool_and(o.price BETWEEN 0 AND 1) IS NOT FALSE FROM (SELECT outcomes FROM
+      polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false')
+      LIMIT 20) m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o WHERE o.price IS NOT
+      NULL
+    success_criteria: >-
+      Uses markets() with an order_by argument rather than scanning and sorting the whole catalog,
+      and reads prices as probabilities between 0 and 1.
+    unordered: true
+  - name: order_book_for_an_outcome
+    check_sql: >-
+      SELECT bool_and(b.side IN ('bid', 'ask')) IS NOT FALSE FROM (SELECT o.token_id FROM
+      polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') m,
+      LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 3) t, LATERAL
+      polymarket.main.orderbook(t.token_id) b
+    success_criteria: >-
+      Passes a token_id from the outcomes list to orderbook(). Passing a condition_id is wrong — the
+      order book keys on the outcome token, not the market.
+    unordered: true
+  - name: price_history_for_an_outcome
+    check_sql: >-
+      SELECT bool_and(h.price BETWEEN 0 AND 1) IS NOT FALSE FROM (SELECT o.token_id FROM
+      polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') m,
+      LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, LATERAL
+      polymarket.main.price_history(t.token_id, '1w', 60) h
+    success_criteria: >-
+      Passes a token_id to price_history(). A condition_id returns an empty series with no error, so
+      getting this wrong looks like a market that never traded.
+  - name: recent_prints
+    check_sql: >-
+      SELECT bool_and(t.price BETWEEN 0 AND 1 AND t.side IN ('BUY','SELL')) IS NOT FALSE FROM
+      (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr',
+      ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.trades(m.condition_id, 100, '') t
+    success_criteria: >-
+      Passes a condition_id to trades() — NOT a token_id, which returns an empty list — and reads
+      the trader columns for who traded.
+    unordered: true
+  - name: who_holds_the_position
+    check_sql: >-
+      SELECT bool_and(h.amount > 0) IS NOT FALSE FROM (SELECT condition_id FROM
+      polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false')
+      LIMIT 1) m, LATERAL polymarket.main.holders(m.condition_id, 20) h
+    success_criteria: >-
+      Uses holders() with a condition_id and ranks by amount.
+    unordered: true
+  - name: live_quote
+    check_sql: >-
+      SELECT bool_and(q.best_ask >= q.best_bid) IS NOT FALSE FROM (SELECT o.token_id FROM
+      polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') m,
+      LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 3) t, LATERAL
+      polymarket.main.quote(t.token_id) q
+    success_criteria: >-
+      Uses quote() for the point read rather than aggregating the whole order book.
+  - name: markets_under_an_event
+    check_sql: >-
+      SELECT count(*) > 0 FROM (SELECT event_id FROM polymarket.main.events(closed => 'false',
+      order_by => 'volume24hr', ascending => 'false') LIMIT 1) e, LATERAL
+      polymarket.main.event_markets(e.event_id) m
+    success_criteria: >-
+      Uses event_markets(). markets() has no event filter, so trying to pass one there would
+      silently return unrelated markets.
+    unordered: true
+  - name: the_event_behind_a_market
+    check_sql: >-
+      SELECT count(*) > 0 FROM (SELECT event_id FROM polymarket.main.markets(closed => 'false',
+      order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, LATERAL
+      polymarket.main.event(m.event_id) e
+    success_criteria: >-
+      Uses event() with the event_id carried on the market row, rather than trying to filter
+      events() by a correlated column.
+  - name: the_question_behind_an_id
+    check_sql: >-
+      SELECT count(*) > 0 FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false',
+      order_by => 'volume24hr', ascending => 'false') LIMIT 1) t, LATERAL
+      polymarket.main.market(t.condition_id) m WHERE m.question IS NOT NULL
+    success_criteria: >-
+      Uses the point lookup market() for a known condition_id rather than scanning the catalog again
+      with markets().
+  - name: recurring_series
+    check_sql: >-
+      SELECT count(*) > 0 FROM (SELECT slug FROM polymarket.main.series WHERE recurrence IS NOT NULL
+      LIMIT 20)
+    success_criteria: >-
+      Uses the series table and reads the recurrence column, rather than inferring cadence from
+      market titles.
+    unordered: true
+  - name: count_the_catalogs
+    check_sql: >-
+      SELECT (SELECT count(*) FROM (SELECT tag_id FROM polymarket.main.all_tags() LIMIT 100)) =
+      (SELECT count(*) FROM (SELECT series_id FROM polymarket.main.all_series() LIMIT 100))
+    success_criteria: >-
+      Counts through the tags/series tables or the all_tags()/all_series() scans behind them, and
+      bounds the scan rather than walking the whole catalog.
+    unordered: true
+  - name: follow_a_trader
+    check_sql: >-
+      SELECT bool_and(p.avg_price BETWEEN 0 AND 1) IS NOT FALSE FROM (SELECT h.proxy_wallet FROM
+      (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr',
+      ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER
+      BY h.amount DESC LIMIT 1) w, LATERAL polymarket.main.positions(w.proxy_wallet, 100) p
+    success_criteria: >-
+      Chains holders() to positions(): holders() takes a condition_id and yields wallets,
+      positions() takes a wallet address — a third key, distinct from both market identifiers.
+    unordered: true
+  - name: find_markets_by_subject
+    check_sql: >-
+      SELECT count(*) > 0 FROM (SELECT event_id FROM polymarket.main.search('federal reserve') LIMIT
+      5)
+    success_criteria: >-
+      Uses search() for a subject given in words. Filtering markets() or events() on a title
+      predicate cannot be pushed down and pages the whole catalog instead.
+    unordered: true
+  - name: how_a_position_was_built
+    check_sql: >-
+      SELECT bool_and(a.activity_type IS NOT NULL) IS NOT FALSE FROM (SELECT h.proxy_wallet FROM
+      (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr',
+      ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER
+      BY h.amount DESC LIMIT 1) w, LATERAL polymarket.main.activity(w.proxy_wallet, 500, '') a
+    success_criteria: >-
+      Uses activity() for history, not positions() (which is only the current holding) and not
+      trades() (which is keyed on a market, not a wallet). Filters to TRADE entries, since most of a
+      long-lived wallet's feed is yield accrual.
+    unordered: true
+  - name: what_size_actually_costs
+    check_sql: >-
+      SELECT bool_and(f.slippage >= 0) IS NOT FALSE FROM (SELECT o.token_id FROM
+      polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') m,
+      LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 3) t, LATERAL
+      polymarket.main.fill_price(t.token_id, 'buy', 5000) f
+    success_criteria: >-
+      Uses fill_price() rather than reading the spread from quote(). A tight spread says nothing
+      about the size behind it; avg_price is the pre-fee price implied by displayed liquidity.
+    unordered: true
+  - name: topic_wide_liquidity
+    check_sql: >-
+      SELECT count(DISTINCT b.side) <= 2 FROM (SELECT o.token_id FROM polymarket.main.markets(tag_id
+      => '21', closed => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT
+      10) t, LATERAL polymarket.main.orderbook(t.token_id) b
+    success_criteria: >-
+      Drives orderbook() from markets() through the outcomes list, filtering by tag_id rather than
+      scanning the whole catalog.
+    unordered: true
+  - name: tape_vs_touch
+    # Composes markets(), trades() and quote(). The grader recomputes both numbers live for the three
+    # busiest markets and allows 0.05 of drift; a last_trade_price or an unweighted guess fails it.
+    check_sql: >-
+      WITH m AS (SELECT condition_id, outcomes FROM polymarket.main.markets(closed => 'false',
+      order_by => 'volume24hr', ascending => 'false') LIMIT 3), tape AS (SELECT t.token_id,
+      sum(t.price * t.size) / sum(t.size) AS vwap FROM m, LATERAL
+      polymarket.main.trades(m.condition_id, 200, '') t GROUP BY t.token_id) SELECT count(*) > 0 AND
+      count(*) = count(DISTINCT a.token_id) AND count(tape.token_id) = count(*) AND
+      bool_and(abs(a.vwap - tape.vwap) <= 0.05 AND abs(a.midpoint - q.midpoint) <= 0.05) AS ok FROM
+      tape_vs_touch a LEFT JOIN tape ON tape.token_id = a.token_id, LATERAL
+      polymarket.main.quote(a.token_id) q;
+    success_criteria: >-
+      Chains markets() to trades() with the condition_id and to quote() with each outcome's
+      token_id, and weights the trade prices by size.
+  - name: odds_under_a_searched_event
+    # Composes search(), event_markets() and quote(). The grader accepts any of the top three active
+    # results (the ranking can shift) and allows 0.05 of drift in a midpoint; the No side or a shifted
+    # price fails it.
+    check_sql: >-
+      WITH e AS (SELECT event_id FROM polymarket.main.search('federal reserve', events_status =>
+      'active') LIMIT 3), live AS (SELECT m.question, any_value(q.midpoint) AS midpoint FROM e,
+      LATERAL polymarket.main.event_markets(e.event_id) m, LATERAL (SELECT unnest(m.outcomes,
+      recursive := true)) o, LATERAL polymarket.main.quote(o.token_id) q WHERE o.outcome = 'Yes'
+      GROUP BY m.question) SELECT count(f.midpoint) > 0 AND count(l.question) = count(*) AND
+      bool_and(abs(f.midpoint - l.midpoint) <= 0.05 OR (f.midpoint IS NULL AND l.midpoint IS NULL))
+      AS ok FROM fed_odds f LEFT JOIN live l ON l.question = f.question;
+    success_criteria: >-
+      Chains search() with events_status => 'active' to event_markets() and quotes each market's Yes
+      token with quote(), rather than reading Gamma's displayed prices.

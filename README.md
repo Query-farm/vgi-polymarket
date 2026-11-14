@@ -316,7 +316,11 @@ differently, and the difference is deliberate:
 - **Prices are exact or NULL.** Polymarket's finest tick is `0.001` and a
   midpoint splits it to `0.0005`, so nothing legitimate needs more than the six
   declared decimal places. A price that will not fit is a misread, and NULL is
-  the honest report of one.
+  the honest report of one. The exception is the Data API's fill price on
+  `trades()` and `activity()`: the origin computes it as USDC paid over shares
+  filled, so a fill at the `0.39` tick arrives as `0.3899999976`. That is
+  arithmetic noise like the amounts', and it is rounded the same way — held to
+  the exact rule, about half of a busy market's tape came back with a NULL price.
 - **Amounts round, half-even.** A 24-hour volume arrives as
   `2306265.4030640004` — sixteen decimal places, of which the last ten are
   float representation noise the origin itself introduced, not USDC. Refusing
@@ -382,6 +386,21 @@ FROM (SELECT h.proxy_wallet
 ORDER BY p.current_value DESC;
 ```
 
+Every holder row carries the outcome's `token_id`, so the same chain can also
+cross back to the order book — here, to mark each of the largest stakes to the
+live midpoint:
+
+```sql
+-- What the biggest stakes in the busiest market are worth right now
+SELECT h.outcome_index, h.holder_name, h.amount, q.midpoint,
+       h.amount * q.midpoint AS marked_value
+FROM (SELECT condition_id FROM polymarket.markets(
+        closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m,
+     LATERAL polymarket.holders(m.condition_id, 20) h,
+     LATERAL polymarket.quote(h.token_id) q
+ORDER BY marked_value DESC;
+```
+
 `percent_pnl` is a percentage, not a fraction: `-44.5` means down 44.5%. It is
 carried as Polymarket sends it rather than rescaled, so it agrees with the
 site's own display.
@@ -400,13 +419,18 @@ declare.
 book and reports the pre-fee fill price and notional:
 
 ```sql
-SELECT o.outcome, q.midpoint, f.avg_price, f.slippage, f.fully_filled
-FROM polymarket.markets(closed => 'false', order_by => 'volume24hr',
-                        ascending => 'false') m,
+SELECT m.question, o.outcome, q.midpoint, f.avg_price, f.slippage, f.fully_filled
+FROM (SELECT question, outcomes, volume_24hr FROM polymarket.markets(
+        closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 10) m,
      LATERAL (SELECT unnest(m.outcomes, recursive := true)) o,
      LATERAL polymarket.quote(o.token_id) q,
-     LATERAL polymarket.fill_price(o.token_id, 'buy', 5000) f;
+     LATERAL polymarket.fill_price(o.token_id, 'buy', 5000) f
+ORDER BY m.volume_24hr DESC, o.outcome_index;
 ```
+
+Bound the market scan in a subquery, as here. A `LIMIT` on the outer query
+does not stop a streaming `markets()` scan that feeds a chain of `LATERAL`
+calls — it walks the catalog until the page cap fails the query.
 
 This exists because the spread is not liquidity. A live market quoted a
 one-tick spread — 0.001, which reads as institutional — on **15 shares**.
@@ -591,8 +615,11 @@ equality, and every interesting question here is about prices, volumes and books
 that move between the two executions — so a reference comparison fails even for a
 correct answer. The invariants assert real properties instead (prices are
 probabilities, an ask is never below a bid, a book side is labelled `bid` or
-`ask`), so they still test something. `tests/test_catalog.py::TestAgentTasks`
-keeps it that way.
+`ask`), so they still test something. Tasks that ask the analyst to save an
+answer as a table are graded by recomputing that answer live, within a tolerance.
+Only each task's name and prompt ship in the catalog; the graders live in
+`vgi-agent-tests.yaml`, which vgi-lint reads beside `vgi-lint.toml`.
+`tests/test_catalog.py::TestAgentTasks` keeps it that way.
 
 ## Releasing
 

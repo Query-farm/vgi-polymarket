@@ -123,7 +123,9 @@ def to_column_decimal(value: Any, kind: pa.Decimal128Type, *, exact: bool) -> De
     normal operation — Polymarket's finest tick is 0.001 and a midpoint splits
     it to 0.0005, so nothing legitimate needs more than the six decimal places
     the column declares. A price that does not fit is a misread, and NULL is the
-    honest report of one.
+    honest report of one. (The Data API's fill prices are the exception — origin
+    arithmetic rather than ticks — and :func:`fill_price_value` rounds them
+    before they reach this policy.)
 
     ``exact=False`` (**amounts** — volume, liquidity, size) rounds instead.
     These arrive as JSON floats that the origin itself computed in binary
@@ -143,6 +145,25 @@ def to_column_decimal(value: Any, kind: pa.Decimal128Type, *, exact: bool) -> De
         return None
     # ROUND_HALF_EVEN is Decimal's default and does not bias a large aggregate.
     return parsed.quantize(Decimal(1).scaleb(-kind.scale))
+
+
+def fill_price_value(value: Any) -> Decimal | None:
+    """A Data API execution price, rounded to the ``PRICE`` column's scale.
+
+    The exact-or-NULL policy for prices assumes a price is a quoted tick, and the
+    CLOB's and Gamma's are. The Data API's trade and activity prices are not:
+    they are what a fill cost per share, ``usdcSize / size`` computed by the
+    origin, so a fill at the 0.39 tick reaches us as ``0.3899999976``. Held to
+    the exact policy, roughly half of a busy market's tape (and more of a wallet's
+    activity feed) came back with a NULL price. These values are origin
+    arithmetic, like the amounts, so they get the amounts' treatment: rounded
+    half-even to six places, which recovers the tick, and NULL only for a value
+    that is not a number at all.
+    """
+    parsed = to_decimal(value)
+    if parsed is None or _too_large(parsed, PRICE):
+        return None
+    return parsed.quantize(Decimal(1).scaleb(-PRICE.scale))
 
 
 def to_timestamp(value: Any) -> datetime | None:
@@ -934,7 +955,7 @@ def trade_row(raw: dict[str, Any]) -> dict[str, Any]:
         "outcome": raw.get("outcome"),
         "outcome_index": _outcome_index(raw),
         "side": raw.get("side"),
-        "price": raw.get("price"),
+        "price": fill_price_value(raw.get("price")),
         "size": raw.get("size"),
         "ts": raw.get("timestamp"),
         "proxy_wallet": raw.get("proxy_wallet"),
@@ -1005,7 +1026,7 @@ def activity_row(raw: dict[str, Any]) -> dict[str, Any]:
         "side": _blank_to_none(raw.get("side")),
         # A non-trade row reports price 0, which is a real price for a market
         # that is not going to happen — so it is nulled rather than carried.
-        "price": raw.get("price") if raw.get("type") == "TRADE" else None,
+        "price": fill_price_value(raw.get("price")) if raw.get("type") == "TRADE" else None,
         "size": raw.get("size"),
         "usdc_size": raw.get("usdc_size"),
         "transaction_hash": raw.get("transaction_hash"),
