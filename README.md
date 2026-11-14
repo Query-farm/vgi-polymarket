@@ -39,7 +39,15 @@ Farm's DuckDB distribution, which ships the `vgi` extension signed and ready:
 uvx haybarn-cli
 ```
 
-The worker speaks two transports, and both are exercised by the test suite.
+**From a release** — no checkout needed; `uvx` installs the tagged worker and
+the engine launches it:
+
+```sql
+ATTACH 'polymarket' (TYPE vgi, LOCATION 'uvx --from git+https://github.com/Query-farm/vgi-polymarket@v0.1.0 vgi-polymarket');
+SELECT count(*) FROM polymarket.tags;
+```
+
+From a checkout, the worker speaks two transports, and both are exercised by the test suite.
 
 **stdio** — the engine launches the worker itself, one process per connection:
 
