@@ -347,7 +347,39 @@ class TestBatching:
         ids = [f"0x{i}" for i in range(api.CONDITION_ID_BATCH_LIMIT + 10)]
         with _client(handler) as client:
             api.markets_by_condition_id(ids, client=client)
-        assert seen == [api.CONDITION_ID_BATCH_LIMIT, 10]
+        # Nothing is found, so the closed-market retry repeats the same chunks.
+        assert seen == [api.CONDITION_ID_BATCH_LIMIT, 10] * 2
+
+    def test_a_closed_market_is_found_by_its_id(self) -> None:
+        """Gamma's keyset endpoint defaults to closed=false even for an id filter."""
+        requests: list[tuple[str | None, list[str]]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            closed = request.url.params.get("closed")
+            ids = request.url.params.get_list("condition_ids")
+            requests.append((closed, ids))
+            markets = [{"conditionId": "0xopen"}] if closed is None and "0xopen" in ids else []
+            if closed == "true" and "0xshut" in ids:
+                markets = [{"conditionId": "0xshut"}]
+            return httpx.Response(200, json={"markets": markets, "next_cursor": ""})
+
+        with _client(handler) as client:
+            found = api.markets_by_condition_id(["0xopen", "0xshut"], client=client)
+        assert set(found) == {"0xopen", "0xshut"}
+        # Only the id the open pass missed is asked for again.
+        assert requests == [(None, ["0xopen", "0xshut"]), ("true", ["0xshut"])]
+
+    def test_no_retry_when_every_id_is_open(self) -> None:
+        calls: list[str | None] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url.params.get("closed"))
+            ids = request.url.params.get_list("condition_ids")
+            return httpx.Response(200, json={"markets": [{"conditionId": c} for c in ids], "next_cursor": ""})
+
+        with _client(handler) as client:
+            api.markets_by_condition_id(["0xa", "0xb"], client=client)
+        assert calls == [None]
 
     def test_prices_asks_for_both_sides_of_every_token(self) -> None:
         bodies: list[list[dict]] = []

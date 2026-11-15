@@ -176,14 +176,19 @@ class OrderbookFunction(RowTransformFunction[OrderbookArgs]):
             ),
             example_queries=examples(
                 (
-                    "Full depth on both sides of one outcome's book",
+                    # The single busiest market is often a game that has just ended, whose
+                    # book is empty; taking one token among the books that are non-empty keeps
+                    # the example showing real depth.
+                    "Full depth on both sides of one actively traded outcome's book",
                     (
-                        "SELECT b.side, b.price, b.size FROM ("
-                        "SELECT o.token_id FROM polymarket.main.markets("
+                        "WITH t AS (SELECT o.token_id FROM polymarket.main.markets("
                         "closed => 'false', order_by => 'volume24hr', ascending => 'false') m, "
-                        "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, "
-                        "LATERAL polymarket.main.orderbook(t.token_id) b "
-                        "ORDER BY b.side, b.price DESC"
+                        "LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 10), "
+                        "books AS (SELECT t.token_id, b.side, b.price, b.size FROM t, "
+                        "LATERAL polymarket.main.orderbook(t.token_id) b) "
+                        "SELECT side, price, size FROM books "
+                        "WHERE token_id = (SELECT min(token_id) FROM books) "
+                        "ORDER BY side, price DESC"
                     ),
                 ),
                 (

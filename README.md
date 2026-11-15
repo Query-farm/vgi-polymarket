@@ -43,7 +43,7 @@ uvx haybarn-cli
 the engine launches it:
 
 ```sql
-ATTACH 'polymarket' (TYPE vgi, LOCATION 'uvx --from git+https://github.com/Query-farm/vgi-polymarket@v0.1.0 vgi-polymarket');
+ATTACH 'polymarket' (TYPE vgi, LOCATION 'uvx --from git+https://github.com/Query-farm/vgi-polymarket@v0.1.1 vgi-polymarket');
 SELECT count(*) FROM polymarket.tags;
 ```
 
@@ -651,7 +651,8 @@ MIT — see [LICENSE](LICENSE).
 
 Copyright (c) 2026 Query Farm LLC — <https://query.farm>
 
-Market data is Polymarket's, redistributed under their terms of use. This
+Market data is Polymarket's, redistributed under their
+[terms of use](https://polymarket.com/tos). This
 connector reads their public APIs and adds nothing to them but a SQL interface.
 
 ## Links

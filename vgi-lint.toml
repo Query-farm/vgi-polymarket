@@ -28,3 +28,25 @@ function and a table cannot share one name in a schema, so the scan takes the \
 "polymarket.main.tags" = { ignore = [
   { code = "VGI808", kind = "domain-exemption", reason = "tag_id is this table's own primary key, not a reference to another table" },
 ] }
+
+# A market row is 33 columns wide, several of them structs and lists with their
+# own documented fields, and vgi.result_columns_schema is its static result
+# shape. Truncating it would hide columns from an agent; DESCRIBE and
+# duckdb_columns() carry the same shape at full length.
+"polymarket.main.markets" = { ignore = [
+  { code = "VGI417", kind = "domain-exemption", reason = "33-column market row; the result shape cannot be shortened without dropping columns" },
+] }
+"polymarket.main.market" = { ignore = [
+  { code = "VGI417", kind = "domain-exemption", reason = "33-column market row; the result shape cannot be shortened without dropping columns" },
+] }
+"polymarket.main.event_markets" = { ignore = [
+  { code = "VGI417", kind = "domain-exemption", reason = "33-column market row; the result shape cannot be shortened without dropping columns" },
+] }
+
+# Every executable example calls Polymarket's live APIs, and the linter runs them
+# concurrently. Run alone, the slowest ones finish in 1-2.5 s; run together they
+# land at 5-8 s, and which ones cross the default 5 s bar changes from run to run
+# (the tags/series agreement checks each walk the whole catalog twice by design).
+# This raises the warning bar only; no example's result or timeout is affected.
+[execution]
+slow_seconds = 10

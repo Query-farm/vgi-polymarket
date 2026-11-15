@@ -538,21 +538,29 @@ def markets_by_condition_id(
     An id that matches nothing simply does not appear in the result. That is the
     only signal available — Gamma answers a filter that matches nothing with an
     empty list, not a 404.
+
+    ``/markets/keyset`` silently applies ``closed=false`` when the parameter is
+    omitted, even to an explicit ``condition_ids`` filter, so a resolved market
+    looked up by its own id comes back empty. Ids the first (open) pass does not
+    find are therefore asked for again with ``closed=true``. The endpoint has no
+    "either" value, and the retry costs a request only when something is missing.
     """
     unique = list(dict.fromkeys(c for c in condition_ids if c))
     found: dict[str, dict[str, Any]] = {}
-    for start in range(0, len(unique), CONDITION_ID_BATCH_LIMIT):
-        chunk = unique[start : start + CONDITION_ID_BATCH_LIMIT]
-        rows, _ = keyset_page(
-            "/markets/keyset",
-            "markets",
-            [("condition_ids", c) for c in chunk],
-            client=client,
-            hint=hint,
-        )
-        for row in rows:
-            if condition_id := row.get("conditionId"):
-                found[str(condition_id)] = row
+    for closed in ((), (("closed", "true"),)):
+        missing = [c for c in unique if c not in found]
+        for start in range(0, len(missing), CONDITION_ID_BATCH_LIMIT):
+            chunk = missing[start : start + CONDITION_ID_BATCH_LIMIT]
+            rows, _ = keyset_page(
+                "/markets/keyset",
+                "markets",
+                [*closed, *(("condition_ids", c) for c in chunk)],
+                client=client,
+                hint=hint,
+            )
+            for row in rows:
+                if condition_id := row.get("conditionId"):
+                    found[str(condition_id)] = row
     return found
 
 
