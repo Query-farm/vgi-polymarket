@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
+import os
 import threading
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
-
-import requests
+from urllib.request import Request, urlopen
 
 
 def request_key(method, path, body):
@@ -26,14 +27,32 @@ class RecordedAPI:
         if mode not in {"replay", "live"}:
             raise ValueError("DATA_MODE must be replay or live")
         self.requests = []
+        self._audit_lock = threading.Lock()
         self.mode = mode
         self.artifact_dir = artifact_dir
-        artifact_dir.mkdir(exist_ok=True)
+        artifact_dir.mkdir(parents=True, exist_ok=True)
         (artifact_dir / "request-audit.json").write_text("[]\n")
         manifest = json.loads((directory / "manifest.json").read_text())
         entries = {}
         for entry in manifest["entries"]:
-            body = (directory / entry["filename"]).read_bytes()
+            file = Path(entry["filename"])
+            if file.is_absolute() or ".." in file.parts:
+                raise ValueError("Fixture filenames must be relative and contained")
+            origin = urlsplit(entry["url"])
+            allowed = origin.scheme == "https" and origin.netloc in {
+                "gamma-api.polymarket.com",
+                "clob.polymarket.com",
+            }
+            if not allowed or not (
+                entry["method"] == "GET"
+                or (
+                    entry["method"] == "POST"
+                    and origin.netloc == "clob.polymarket.com"
+                    and origin.path == "/books"
+                )
+            ):
+                raise ValueError("Manifest contains an unsupported public read")
+            body = (directory / file).read_bytes()
             if hashlib.sha256(body).hexdigest() != entry["sha256"]:
                 raise ValueError(f"Recorded response hash mismatch: {entry['filename']}")
             prefix = "/gamma" if "gamma-api" in entry["url"] else "/clob"
@@ -60,20 +79,28 @@ class RecordedAPI:
                     "path": self.path,
                     "started_utc": datetime.now(UTC).isoformat(),
                 }
-                owner.requests.append(record)
+                with owner._audit_lock:
+                    owner.requests.append(record)
                 try:
                     key = request_key(self.command, self.path, raw)
                     if key not in entries:
                         raise ValueError(f"Request outside recorded reads; no fallback: {key}")
                     entry, body = entries[key]
                     if mode == "live":
-                        response = requests.request(
-                            entry["method"], entry["url"], json=entry["request_json"], timeout=35
+                        payload = (
+                            json.dumps(entry["request_json"]).encode() if entry["request_json"] else None
                         )
-                        response.raise_for_status()
-                        body = response.content
-                        record["source_date"] = response.headers.get("date")
-                    record.update(
+                        request = Request(
+                            entry["url"],
+                            data=payload,
+                            method=entry["method"],
+                            headers={"Content-Type": "application/json"},
+                        )
+                        with urlopen(request, timeout=35) as response:
+                            body = response.read()
+                            record["source_date"] = response.headers.get("date")
+                    owner._save_audit(
+                        record,
                         status=200,
                         bytes=len(body),
                         sha256=hashlib.sha256(body).hexdigest(),
@@ -81,7 +108,6 @@ class RecordedAPI:
                         source_url=entry["url"],
                     )
                     (artifact_dir / entry["filename"]).write_bytes(body)
-                    (artifact_dir / "request-audit.json").write_text(json.dumps(owner.requests, indent=2))
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))
@@ -89,16 +115,34 @@ class RecordedAPI:
                     self.end_headers()
                     self.wfile.write(body)
                 except Exception as exc:
-                    record.update(status=400, error=str(exc))
-                    (artifact_dir / "request-audit.json").write_text(json.dumps(owner.requests, indent=2))
+                    owner._save_audit(record, status=400, error=str(exc))
                     self.send_error(400, str(exc))
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.url = f"http://127.0.0.1:{self.server.server_port}"
+        self._closed = False
+        names = ["POLYMARKET_GAMMA_URL", "POLYMARKET_CLOB_URL", "POLYMARKET_DATA_URL"]
+        self.previous_env = {name: os.environ.get(name) for name in names}
+        for name, path in zip(names, ["gamma", "clob", "unavailable"], strict=True):
+            os.environ[name] = self.url + "/" + path
+        atexit.register(self.close)
+
+    def _save_audit(self, record, **changes):
+        with self._audit_lock:
+            record.update(changes)
+            (self.artifact_dir / "request-audit.json").write_text(json.dumps(self.requests, indent=2))
 
     def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        for name, value in self.previous_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=5)
