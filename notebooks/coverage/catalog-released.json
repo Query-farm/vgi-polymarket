@@ -1,0 +1,228 @@
+{
+  "schema_version": 1,
+  "repository": "Query-farm/vgi-polymarket",
+  "revision": "v0.1.0",
+  "captured_at": "2026-11-15T01:21:01.762116+00:00",
+  "default_schema": "main",
+  "scope": "all_public_functions_and_tables",
+  "complete": true,
+  "evidence": [
+    {
+      "path": "coverage/provenance.json",
+      "sha256": "32e02f00cdb58fa90b4e23d631ecc6458ead55f7a8acfd896894babd8f5a9c3d",
+      "description": "Actual collection and response provenance."
+    },
+    {
+      "path": "coverage/source-comparison.json",
+      "sha256": "dd0c2035f7a348f61f9f6a3406020b75db16fef442728d4221b043b080949163",
+      "description": "Exact release/public source identity."
+    },
+    {
+      "path": "coverage/analysis-preservation.json",
+      "sha256": "f7fcebf2d84ae7780fa9cdff4615481bf56f4a99e2a2510c92fcd3b8a7ea3070",
+      "description": "Original six SQL cells, six displayed tables and four fixtures preservation audit."
+    },
+    {
+      "path": "coverage/released-functions.json",
+      "sha256": "954fb6cb5dbdf809cdea3361944acfcc64630e39ad76ebe85b68367d8e93f38a",
+      "description": "Complete native duckdb_functions() export filtered by polymarket; no names omitted."
+    },
+    {
+      "path": "coverage/released-tables.json",
+      "sha256": "ed4ad05451c8259500df6773086da9bd8d45bb5906d85ec059b46d78e744ece5",
+      "description": "Complete native duckdb_tables() export filtered by polymarket; no names omitted."
+    },
+    {
+      "path": "coverage/released-views.json",
+      "sha256": "eac346a9850e6f66bee2f9089d0fe6244b7ba5f6ea9fdc06c73b9b640c463b88",
+      "description": "Complete native duckdb_views() export filtered by polymarket; no names omitted."
+    },
+    {
+      "path": "coverage/released-databases.json",
+      "sha256": "975f039c3ce40c51e6d44c5ae191d4e70f04db4d108de84604fb2ace35608efc",
+      "description": "Actual catalog title/subtitle and metadata."
+    }
+  ],
+  "objects": [
+    {
+      "schema": "main",
+      "name": "activity",
+      "kind": "function",
+      "signatures": [
+        "activity(VARCHAR, BIGINT, VARCHAR) -> TABLE"
+      ],
+      "authentication": "none",
+      "access": "read"
+    },
+    {
+      "schema": "main",
+      "name": "all_series",
+      "kind": "function",
+      "signatures": [
+        "all_series() -> TABLE"
+      ],
+      "authentication": "none",
+      "access": "read"
+    },
+    {
+      "schema": "main",
+      "name": "all_tags",
+      "kind": "function",
+      "signatures": [
+        "all_tags() -> TABLE"
+      ],
+      "authentication": "none",
+      "access": "read"
+    },
+    {
+      "schema": "main",
+      "name": "event",
+      "kind": "function",
+      "signatures": [
+        "event(VARCHAR) -> TABLE"
+      ],
+      "authentication": "none",
+      "access": "read"
+    },
+    {
+      "schema": "main",
+      "name": "event_markets",
+      "kind": "function",
+      "signatures": [
+        "event_markets(VARCHAR) -> TABLE"
+      ],
+      "authentication": "none",
+      "access": "read"
+    },
+    {
+      "schema": "main",
+      "name": "events",
+      "kind": "function",
+      "signatures": [
+        "events(VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR) -> TABLE"
+      ],
+      "authentication": "none",
+      "access": "read"
+    },
+    {
+      "schema": "main",
+      "name": "fill_price",
+      "kind": "function",
+      "signatures": [
+        "fill_price(VARCHAR, VARCHAR, BIGINT) -> TABLE"
+      ],
+      "authentication": "none",
+      "access": "read"
+    },
+    {
+      "schema": "main",
+      "name": "holders",
+      "kind": "function",
+      "signatures": [
+        "holders(VARCHAR, BIGINT) -> TABLE"
+      ],
+      "authentication": "none",
+      "access": "read"
+    },
+    {
+      "schema": "main",
+      "name": "market",
+      "kind": "function",
+      "signatures": [
+        "market(VARCHAR) -> TABLE"
+      ],
+      "authentication": "none",
+      "access": "read"
+    },
+    {
+      "schema": "main",
+      "name": "markets",
+      "kind": "function",
+      "signatures": [
+        "markets(VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR) -> TABLE"
+      ],
+      "authentication": "none",
+      "access": "read"
+    },
+    {
+      "schema": "main",
+      "name": "orderbook",
+      "kind": "function",
+      "signatures": [
+        "orderbook(VARCHAR) -> TABLE"
+      ],
+      "authentication": "none",
+      "access": "read"
+    },
+    {
+      "schema": "main",
+      "name": "positions",
+      "kind": "function",
+      "signatures": [
+        "positions(VARCHAR, BIGINT) -> TABLE"
+      ],
+      "authentication": "none",
+      "access": "read"
+    },
+    {
+      "schema": "main",
+      "name": "price_history",
+      "kind": "function",
+      "signatures": [
+        "price_history(VARCHAR, VARCHAR, BIGINT) -> TABLE"
+      ],
+      "authentication": "none",
+      "access": "read"
+    },
+    {
+      "schema": "main",
+      "name": "quote",
+      "kind": "function",
+      "signatures": [
+        "quote(VARCHAR) -> TABLE"
+      ],
+      "authentication": "none",
+      "access": "read"
+    },
+    {
+      "schema": "main",
+      "name": "search",
+      "kind": "function",
+      "signatures": [
+        "search(VARCHAR, VARCHAR) -> TABLE"
+      ],
+      "authentication": "none",
+      "access": "read"
+    },
+    {
+      "schema": "main",
+      "name": "series",
+      "kind": "table",
+      "signatures": [
+        "TABLES"
+      ],
+      "authentication": "none",
+      "access": "read"
+    },
+    {
+      "schema": "main",
+      "name": "tags",
+      "kind": "table",
+      "signatures": [
+        "TABLES"
+      ],
+      "authentication": "none",
+      "access": "read"
+    },
+    {
+      "schema": "main",
+      "name": "trades",
+      "kind": "function",
+      "signatures": [
+        "trades(VARCHAR, BIGINT, VARCHAR) -> TABLE"
+      ],
+      "authentication": "none",
+      "access": "read"
+    }
+  ]
+}

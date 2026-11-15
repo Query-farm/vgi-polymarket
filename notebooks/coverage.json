@@ -1,0 +1,360 @@
+{
+  "schema_version": 1,
+  "catalogs": {
+    "released": {
+      "path": "coverage/catalog-released.json",
+      "sha256": "98b1c73e77243f84504aa8778a14d037141db905a08fae98607935ebff89e9ce",
+      "review": {
+        "status": "approved",
+        "reviewer": "Codex /root/notebooks_ortools",
+        "reviewed_at": "2026-11-15T01:21:01.762116+00:00",
+        "catalog_sha256": "98b1c73e77243f84504aa8778a14d037141db905a08fae98607935ebff89e9ce",
+        "notes": "All 18 names retained, including nine undemonstrated functions. The annotated v0.1.0 tag dereferences to the captured public-main commit 4b7daf67140d31db972e16188407d8bd37367902. Source, dependencies and the complete runtime API are identical. Receipts retain the literal v0.1.0 launch label; current-interface credit is reconciled separately, not mislabeled as execution of a current-SHA command."
+      }
+    },
+    "current": {
+      "path": "coverage/catalog-current.json",
+      "sha256": "22f3f9ba7ffc11b5683cc5398b39264177444688fd07eda1d349c8863ab47b8d",
+      "review": {
+        "status": "approved",
+        "reviewer": "Codex /root/notebooks_ortools",
+        "reviewed_at": "2026-11-15T01:21:01.762116+00:00",
+        "catalog_sha256": "22f3f9ba7ffc11b5683cc5398b39264177444688fd07eda1d349c8863ab47b8d",
+        "notes": "All 18 names retained, including nine undemonstrated functions. The annotated v0.1.0 tag dereferences to the captured public-main commit 4b7daf67140d31db972e16188407d8bd37367902. Source, dependencies and the complete runtime API are identical. Receipts retain the literal v0.1.0 launch label; current-interface credit is reconciled separately, not mislabeled as execution of a current-SHA command."
+      }
+    }
+  },
+  "notebooks": [
+    {
+      "path": "01_price_the_displayed_depth_at_size.ipynb",
+      "sha256": "e656845815bb58c218b81daba10e1b86f64fe4cdef5ca9207bef845d089082ac",
+      "execution": {
+        "path": "coverage/run-01.json",
+        "sha256": "1785d0249a85e55309bcbce0a10ddb7ac5fb09aa2b5a34b07fa9e5d32755ffcf"
+      }
+    },
+    {
+      "path": "02_keep_events_markets_and_outcomes_distinct.ipynb",
+      "sha256": "1a6a1a4d10e091ed0a2a4fddd7e9b8e1260acd373d46f5455af78769ef8f0d7e",
+      "execution": {
+        "path": "coverage/run-02.json",
+        "sha256": "d0ceb895987a63af9655ea67308f41a8d20622ce833afa5cbc74ade023ad4a3c"
+      }
+    }
+  ],
+  "examples": [
+    {
+      "object": {
+        "schema": "main",
+        "name": "market"
+      },
+      "notebook": "01_price_the_displayed_depth_at_size.ipynb",
+      "sql": [
+        {
+          "cell": "5bf1124d",
+          "reference": "polymarket.market"
+        }
+      ],
+      "narrative_cells": [
+        "f1760090"
+      ],
+      "result_cells": [
+        "2a7cbb6c"
+      ],
+      "interpretation_cells": [
+        "2a7cbb6c"
+      ],
+      "review": {
+        "status": "approved",
+        "reviewer": "Codex /root/notebooks_ortools",
+        "reviewed_at": "2026-11-15T01:21:01.762116+00:00",
+        "notebook_sha256": "e656845815bb58c218b81daba10e1b86f64fe4cdef5ca9207bef845d089082ac",
+        "catalog_sha256": [
+          "98b1c73e77243f84504aa8778a14d037141db905a08fae98607935ebff89e9ce",
+          "22f3f9ba7ffc11b5683cc5398b39264177444688fd07eda1d349c8863ab47b8d"
+        ],
+        "purpose": "Resolve one condition to its question and ordered outcome-token identities before querying books.",
+        "finding": "The recorded match condition yields distinct Spirit/MOUZ token IDs. SQL outcomes and raw response tuples match exactly; a condition ID is not a token ID."
+      }
+    },
+    {
+      "object": {
+        "schema": "main",
+        "name": "orderbook"
+      },
+      "notebook": "01_price_the_displayed_depth_at_size.ipynb",
+      "sql": [
+        {
+          "cell": "5bf1124d",
+          "reference": "polymarket.orderbook"
+        }
+      ],
+      "narrative_cells": [
+        "029127db"
+      ],
+      "result_cells": [
+        "ac8d2740",
+        "82405009"
+      ],
+      "interpretation_cells": [
+        "82405009"
+      ],
+      "review": {
+        "status": "approved",
+        "reviewer": "Codex /root/notebooks_ortools",
+        "reviewed_at": "2026-11-15T01:21:01.762116+00:00",
+        "notebook_sha256": "e656845815bb58c218b81daba10e1b86f64fe4cdef5ca9207bef845d089082ac",
+        "catalog_sha256": [
+          "98b1c73e77243f84504aa8778a14d037141db905a08fae98607935ebff89e9ce",
+          "22f3f9ba7ffc11b5683cc5398b39264177444688fd07eda1d349c8863ab47b8d"
+        ],
+        "purpose": "Account for every returned level and price a hypothetical buy from the cheapest asks.",
+        "finding": "1,000 shares fills completely at 0.92 Spirit and 0.09 MOUZ USDC/share. Increasing to 200,000 on the same fingerprint reveals incomplete depth and higher average prices; partial averages price only filled shares. Decimal notional and filled/unfilled conservation pass."
+      }
+    },
+    {
+      "object": {
+        "schema": "main",
+        "name": "tags"
+      },
+      "notebook": "02_keep_events_markets_and_outcomes_distinct.ipynb",
+      "sql": [
+        {
+          "cell": "reference-fetch",
+          "reference": "polymarket.main.tags"
+        }
+      ],
+      "narrative_cells": [
+        "reference-story"
+      ],
+      "result_cells": [
+        "reference-interpretation",
+        "audit-chart"
+      ],
+      "interpretation_cells": [
+        "reference-interpretation"
+      ],
+      "review": {
+        "status": "approved",
+        "reviewer": "Codex /root/notebooks_ortools",
+        "reviewed_at": "2026-11-15T01:21:01.762116+00:00",
+        "notebook_sha256": "1a6a1a4d10e091ed0a2a4fddd7e9b8e1260acd373d46f5455af78769ef8f0d7e",
+        "catalog_sha256": [
+          "98b1c73e77243f84504aa8778a14d037141db905a08fae98607935ebff89e9ce",
+          "22f3f9ba7ffc11b5683cc5398b39264177444688fd07eda1d349c8863ab47b8d"
+        ],
+        "purpose": "Identify a bounded topic vocabulary and distinguish retained labels from scanner retrieval.",
+        "finding": "20 distinct topic IDs are retained; names are displayed and contrasted with recurring-series definitions. The actual audit sees 1,600 rows in fetched tag bodies, exposing why this 20-row slice is not a complete vocabulary."
+      }
+    },
+    {
+      "object": {
+        "schema": "main",
+        "name": "series"
+      },
+      "notebook": "02_keep_events_markets_and_outcomes_distinct.ipynb",
+      "sql": [
+        {
+          "cell": "reference-fetch",
+          "reference": "polymarket.main.series"
+        }
+      ],
+      "narrative_cells": [
+        "reference-story"
+      ],
+      "result_cells": [
+        "reference-interpretation",
+        "audit-chart"
+      ],
+      "interpretation_cells": [
+        "reference-interpretation"
+      ],
+      "review": {
+        "status": "approved",
+        "reviewer": "Codex /root/notebooks_ortools",
+        "reviewed_at": "2026-11-15T01:21:01.762116+00:00",
+        "notebook_sha256": "1a6a1a4d10e091ed0a2a4fddd7e9b8e1260acd373d46f5455af78769ef8f0d7e",
+        "catalog_sha256": [
+          "98b1c73e77243f84504aa8778a14d037141db905a08fae98607935ebff89e9ce",
+          "22f3f9ba7ffc11b5683cc5398b39264177444688fd07eda1d349c8863ab47b8d"
+        ],
+        "purpose": "Read recurring-event definitions and summarize their recurrence/status without confusing them with one event.",
+        "finding": "20 distinct series are retained, all open/active and 11 daily; six example titles/recurrences are displayed. Eight-page batching and read-ahead produce 800 retrieved records in this execution, separate from the SQL slice."
+      }
+    },
+    {
+      "object": {
+        "schema": "main",
+        "name": "search"
+      },
+      "notebook": "02_keep_events_markets_and_outcomes_distinct.ipynb",
+      "sql": [
+        {
+          "cell": "discovery-fetch",
+          "reference": "polymarket.main.search"
+        }
+      ],
+      "narrative_cells": [
+        "discovery-story"
+      ],
+      "result_cells": [
+        "discovery-fetch",
+        "discovery-interpretation"
+      ],
+      "interpretation_cells": [
+        "discovery-interpretation"
+      ],
+      "review": {
+        "status": "approved",
+        "reviewer": "Codex /root/notebooks_ortools",
+        "reviewed_at": "2026-11-15T01:21:01.762116+00:00",
+        "notebook_sha256": "1a6a1a4d10e091ed0a2a4fddd7e9b8e1260acd373d46f5455af78769ef8f0d7e",
+        "catalog_sha256": [
+          "98b1c73e77243f84504aa8778a14d037141db905a08fae98607935ebff89e9ce",
+          "22f3f9ba7ffc11b5683cc5398b39264177444688fd07eda1d349c8863ab47b8d"
+        ],
+        "purpose": "Find active Bitcoin event candidates and choose a recorded result by explicit identity.",
+        "finding": "Eight distinct text-search events are retained. The annual event 89502 and November event 1292829 define the experiment; matching text identifies events, not the child-market population."
+      }
+    },
+    {
+      "object": {
+        "schema": "main",
+        "name": "markets"
+      },
+      "notebook": "02_keep_events_markets_and_outcomes_distinct.ipynb",
+      "sql": [
+        {
+          "cell": "discovery-fetch",
+          "reference": "polymarket.main.markets"
+        }
+      ],
+      "narrative_cells": [
+        "discovery-story"
+      ],
+      "result_cells": [
+        "discovery-interpretation",
+        "children-chart"
+      ],
+      "interpretation_cells": [
+        "children-chart"
+      ],
+      "review": {
+        "status": "approved",
+        "reviewer": "Codex /root/notebooks_ortools",
+        "reviewed_at": "2026-11-15T01:21:01.762116+00:00",
+        "notebook_sha256": "1a6a1a4d10e091ed0a2a4fddd7e9b8e1260acd373d46f5455af78769ef8f0d7e",
+        "catalog_sha256": [
+          "98b1c73e77243f84504aa8778a14d037141db905a08fae98607935ebff89e9ce",
+          "22f3f9ba7ffc11b5683cc5398b39264177444688fd07eda1d349c8863ab47b8d"
+        ],
+        "purpose": "Use a supported Crypto tag filter and compare the bounded market population against real event membership.",
+        "finding": "Eight distinct topic-filtered conditions are sampled independently. Only five of the annual event’s 47 children occur in that sample; absence from a bounded topic slice is not absence from the event."
+      }
+    },
+    {
+      "object": {
+        "schema": "main",
+        "name": "events"
+      },
+      "notebook": "02_keep_events_markets_and_outcomes_distinct.ipynb",
+      "sql": [
+        {
+          "cell": "discovery-fetch",
+          "reference": "polymarket.main.events"
+        }
+      ],
+      "narrative_cells": [
+        "discovery-story"
+      ],
+      "result_cells": [
+        "discovery-interpretation",
+        "audit-chart"
+      ],
+      "interpretation_cells": [
+        "discovery-interpretation"
+      ],
+      "review": {
+        "status": "approved",
+        "reviewer": "Codex /root/notebooks_ortools",
+        "reviewed_at": "2026-11-15T01:21:01.762116+00:00",
+        "notebook_sha256": "1a6a1a4d10e091ed0a2a4fddd7e9b8e1260acd373d46f5455af78769ef8f0d7e",
+        "catalog_sha256": [
+          "98b1c73e77243f84504aa8778a14d037141db905a08fae98607935ebff89e9ce",
+          "22f3f9ba7ffc11b5683cc5398b39264177444688fd07eda1d349c8863ab47b8d"
+        ],
+        "purpose": "Contrast topic-filtered event discovery with text-search event and condition-level market populations.",
+        "finding": "Eight distinct topic events, eight search events and eight topic markets retain different identifiers and selection rules. Their equality in row count is imposed by LIMIT, not evidence that they describe the same population."
+      }
+    },
+    {
+      "object": {
+        "schema": "main",
+        "name": "event"
+      },
+      "notebook": "02_keep_events_markets_and_outcomes_distinct.ipynb",
+      "sql": [
+        {
+          "cell": "children-fetch",
+          "reference": "polymarket.main.event"
+        }
+      ],
+      "narrative_cells": [
+        "children-story"
+      ],
+      "result_cells": [
+        "children-chart"
+      ],
+      "interpretation_cells": [
+        "children-chart"
+      ],
+      "review": {
+        "status": "approved",
+        "reviewer": "Codex /root/notebooks_ortools",
+        "reviewed_at": "2026-11-15T01:21:01.762116+00:00",
+        "notebook_sha256": "1a6a1a4d10e091ed0a2a4fddd7e9b8e1260acd373d46f5455af78769ef8f0d7e",
+        "catalog_sha256": [
+          "98b1c73e77243f84504aa8778a14d037141db905a08fae98607935ebff89e9ce",
+          "22f3f9ba7ffc11b5683cc5398b39264177444688fd07eda1d349c8863ab47b8d"
+        ],
+        "purpose": "Look up the selected event by its event ID and reconcile its declared child inventory.",
+        "finding": "The annual event declares 47 questions; direct child lookup returns all 47. The experiment switches only the event and reconciles 33 November questions. The two recorded GETs are independent responses, not an atomic snapshot."
+      }
+    },
+    {
+      "object": {
+        "schema": "main",
+        "name": "event_markets"
+      },
+      "notebook": "02_keep_events_markets_and_outcomes_distinct.ipynb",
+      "sql": [
+        {
+          "cell": "children-fetch",
+          "reference": "polymarket.main.event_markets"
+        }
+      ],
+      "narrative_cells": [
+        "children-story"
+      ],
+      "result_cells": [
+        "children-chart",
+        "checks-results"
+      ],
+      "interpretation_cells": [
+        "children-chart"
+      ],
+      "review": {
+        "status": "approved",
+        "reviewer": "Codex /root/notebooks_ortools",
+        "reviewed_at": "2026-11-15T01:21:01.762116+00:00",
+        "notebook_sha256": "1a6a1a4d10e091ed0a2a4fddd7e9b8e1260acd373d46f5455af78769ef8f0d7e",
+        "catalog_sha256": [
+          "98b1c73e77243f84504aa8778a14d037141db905a08fae98607935ebff89e9ce",
+          "22f3f9ba7ffc11b5683cc5398b39264177444688fd07eda1d349c8863ab47b8d"
+        ],
+        "purpose": "Follow the actual event relationship and partition all returned child statuses and outcome tokens.",
+        "finding": "Annual case: 47 unique conditions, 94 unique tokens, 19 closed and 28 open/accepting. November case: 33 conditions and 66 tokens. Nine invariants check identity, declared/returned counts and complete partitioning. Accepting flags do not promise executable depth."
+      }
+    }
+  ]
+}

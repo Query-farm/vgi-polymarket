@@ -1,0 +1,77 @@
+{
+  "query": "SELECT * FROM duckdb_tables() WHERE database_name='polymarket'",
+  "columns": [
+    "database_name",
+    "database_oid",
+    "schema_name",
+    "schema_oid",
+    "table_name",
+    "table_oid",
+    "comment",
+    "tags",
+    "internal",
+    "temporary",
+    "has_primary_key",
+    "estimated_size",
+    "column_count",
+    "index_count",
+    "check_constraint_count",
+    "sql"
+  ],
+  "rows": [
+    [
+      "polymarket",
+      22595,
+      "main",
+      22596,
+      "series",
+      22746,
+      "Recurring question series, each opening a new event per occurrence",
+      {
+        "domain": "prediction-markets",
+        "provider": "polymarket",
+        "vgi.category": "reference",
+        "vgi.doc_llm": "The catalog of recurring question series \u2014 about 2,400 rows. A series opens a new event each occurrence, like `nfl` opening one per game, so this is the level to start from for anything periodic. Take a `slug` and pass it to `events()` as `series_slug`. Note that many of Polymarket's biggest markets are one-offs belonging to no series, so use `tags` when you want coverage of the whole site.",
+        "vgi.doc_md": "Every recurring series Polymarket lists, as an ordinary table \u2014 no argument required.\n\n### What a series is, and is not\n\nA series groups events that recur: `nfl` opens an event per game, and each of those events carries a market per outcome. Plenty of the biggest markets on the site are one-offs that belong to no series at all, so this is a view of the recurring part of Polymarket rather than of all of it \u2014 `tags` is the axis that covers everything.\n\n### Where to go next\n\nTake a `slug` and pass it to `events()` as `series_slug` for that series' occurrences.",
+        "vgi.example_queries": "[{\"description\": \"Active recurring series by recent volume\", \"sql\": \"SELECT slug, title, recurrence, volume_24hr FROM polymarket.main.series WHERE active AND NOT closed ORDER BY volume_24hr DESC NULLS LAST LIMIT 20\"}, {\"description\": \"How many series run at each cadence\", \"sql\": \"SELECT recurrence, count(*) AS series_count FROM polymarket.main.series GROUP BY recurrence ORDER BY series_count DESC\"}]",
+        "vgi.keywords": "[\"series\", \"recurring\", \"catalog\", \"discovery\", \"schedule\"]",
+        "vgi.title": "Polymarket Recurring Series"
+      },
+      false,
+      false,
+      true,
+      0,
+      16,
+      1,
+      0,
+      "CREATE TABLE series(series_id VARCHAR, slug VARCHAR, ticker VARCHAR, title VARCHAR, description VARCHAR, series_type VARCHAR, recurrence VARCHAR, active BOOLEAN, closed BOOLEAN, archived BOOLEAN, featured BOOLEAN, volume_24hr DECIMAL(28,6), comment_count INTEGER, start_date TIMESTAMP WITH TIME ZONE, created_at TIMESTAMP WITH TIME ZONE, updated_at TIMESTAMP WITH TIME ZONE, PRIMARY KEY(series_id));"
+    ],
+    [
+      "polymarket",
+      22595,
+      "main",
+      22596,
+      "tags",
+      22745,
+      "Every topic on Polymarket; the tag_id everything else filters on",
+      {
+        "domain": "prediction-markets",
+        "provider": "polymarket",
+        "vgi.category": "reference",
+        "vgi.doc_llm": "The catalog of every topic on Polymarket \u2014 around 7,300 rows, small and slow-changing. This is the discovery entry point: `tag_id` is the filter `markets()` and `events()` both accept, and this is where you find one. Match on `label` or `slug` for a topic like Crypto, Politics or Sports.",
+        "vgi.doc_md": "Every topic tag Polymarket uses, as an ordinary table \u2014 no argument required.\n\n### Why this is a table and most things are functions\n\nIt has no required key and changes slowly. The market-data functions are neither, which is why they take a key.\n\n### The long tail is real\n\nA few dozen tags carry nearly all the volume, and the rest are narrow one-off labels left over from individual events. Search `label` for the topic you want rather than browsing.\n\n### Where to go next\n\nTake a `tag_id` and pass it to `markets()` for the tradeable questions, or to `events()` for the groupings above them.",
+        "vgi.example_queries": "[{\"description\": \"Find the tag id for a topic\", \"sql\": \"SELECT tag_id, label, slug FROM polymarket.main.tags WHERE label ILIKE '%crypto%' ORDER BY label\"}, {\"description\": \"Topics whose tags were published most recently\", \"sql\": \"SELECT label, slug, published_at FROM polymarket.main.tags WHERE published_at IS NOT NULL ORDER BY published_at DESC LIMIT 20\"}]",
+        "vgi.keywords": "[\"tags\", \"topics\", \"categories\", \"catalog\", \"discovery\"]",
+        "vgi.title": "Polymarket Topic Tags"
+      },
+      false,
+      false,
+      true,
+      0,
+      6,
+      1,
+      0,
+      "CREATE TABLE tags(tag_id VARCHAR, \"label\" VARCHAR, slug VARCHAR, created_at TIMESTAMP WITH TIME ZONE, updated_at TIMESTAMP WITH TIME ZONE, published_at TIMESTAMP WITH TIME ZONE, PRIMARY KEY(tag_id));"
+    ]
+  ]
+}

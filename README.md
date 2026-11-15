@@ -663,4 +663,4 @@ connector reads their public APIs and adds nothing to them but a SQL interface.
 
 ## Executed notebook
 
-[Price the displayed depth at size](notebooks/README.md) uses recorded public books to compare hypothetical fill price, depth and uncovered shares, with a separate size experiment.
+[Executed SQL notebooks](notebooks/README.md) preserve the recorded depth/size analysis and add bounded discovery through event, market and outcome identities. Both include separate parameter experiments and GitHub/Colab setup.

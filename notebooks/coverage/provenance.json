@@ -1,0 +1,13 @@
+{
+  "repository": "Query-farm/vgi-polymarket",
+  "release_tag": "v0.1.0",
+  "release_revision": "4b7daf67140d31db972e16188407d8bd37367902",
+  "current_public_revision": "4b7daf67140d31db972e16188407d8bd37367902",
+  "engine": "Haybarn 2.0.0rc11 / VGI e75482339d",
+  "captured_at": "2026-11-15T01:21:01.762116+00:00",
+  "released_launch": "uvx --from git+https://github.com/Query-farm/vgi-polymarket@v0.1.0 vgi-polymarket",
+  "current_catalog_probe": "Same uvx Git launcher with exact public-main SHA; both catalogs collected through real Haybarn with empty temporary SQL-secret storage and UTC. No worker build or source changes.",
+  "data_boundary": "Book 01 original three public response bodies and manifest remain byte-identical. Book 02 uses 40 complete unmodified public Gamma response bodies plus provenance manifest, including actual prefetch/read-ahead pages. Explicit replay default; optional live forwards registered public read routes with no fallback. No credentials/account writes.",
+  "counting": "All 18 logical (schema,name) surfaces: 16 functions plus tags/series tables; zero views. Every object remains in denominator. Public data/read-only APIs; no authenticated/write surfaces advertised. all_tags/all_series have distinct names from their table aliases, and are not credited by executing tags/series.",
+  "comparison": "The annotated v0.1.0 tag dereferences to the captured public-main commit 4b7daf67140d31db972e16188407d8bd37367902. Source, dependencies and the complete runtime API are identical. Receipts retain the literal v0.1.0 launch label; current-interface credit is reconciled separately, not mislabeled as execution of a current-SHA command."
+}

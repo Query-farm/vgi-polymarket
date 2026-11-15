@@ -1,0 +1,84 @@
+{
+  "baseline": "4b7daf67140d31db972e16188407d8bd37367902",
+  "meaning": "Original analytical SQL statements unchanged after whitespace normalization; ATTACH alone migrated to clean released launch. Original displayed tables and four original fixture bytes are identical. Heading levels, setup explanation and explicitly disclosed independent visual scales updated; changed narrative recorded below. Frozen helper/46 companions match published manifest.",
+  "original_sql_cells_preserved": [
+    "5bf1124d",
+    "a3b757c0",
+    "6616c7bf",
+    "962cb541",
+    "e8ea5767",
+    "3ad2eb67"
+  ],
+  "markdown_narrative_cells_preserved": [
+    "986d0c42",
+    "d78ed3e5"
+  ],
+  "markdown_cells_updated": [
+    {
+      "cell": "f1760090",
+      "before": "Resolve the question to its outcome tokens The literal `uvx` launch installs the worker from an immutable remote Git revision, with tested protocol dependencies. No local worker checkout is required. **`condition_id` identifies the question; `token_id` identifies one outcome.** Order books accept the latter. Unnest the worker's aligned outcome structs instead of independently joining the API's parallel JSON arrays. We make one condition-ID lookup and two book reads, one per resulting token in this execution. This bounds the requested population. SQL `LIMIT` would restrict returned rows, not the completeness of a book response. The [official book API](https://docs.polymarket.com/api-reference/market-data/get-order-book) describes the token-level bid/ask response.",
+      "after": "Resolve the question to its outcome tokens The literal `uvx` launch installs the worker from its published v0.1.0 Git release, with its own dependency declarations. No local worker checkout is required. **`condition_id` identifies the question; `token_id` identifies one outcome.** Order books accept the latter. Unnest the worker's aligned outcome structs instead of independently joining the API's parallel JSON arrays. We make one condition-ID lookup and two book reads, one per resulting token in this execution. This bounds the requested population. SQL `LIMIT` would restrict returned rows, not the completeness of a book response. The [official book API](https://docs.polymarket.com/api-reference/market-data/get-order-book) describes the token-level bid/ask response."
+    },
+    {
+      "cell": "029127db",
+      "before": "Walk asks from the lowest price upward For each level, take the smaller of its available shares and the request remaining after all cheaper levels. Sum **taken shares \u00d7 level price** for pre-fee notional. Divide by filled shares for the weighted average; use NULL if nothing fills. All outcomes remain in the result, and unfilled shares are explicit. The books are already materialized. Changing `SIZE_SHARES` changes this SQL calculation, not the request population or recorded source. Average prices are derived ratios; source price/size and notional use decimal columns, while SQL division produces a floating-point ratio for display.",
+      "after": "Walk asks from the lowest price upward For each level, take the smaller of its available shares and the request remaining after all cheaper levels. Sum **taken shares \u00d7 level price** for pre-fee notional. Divide by filled shares for the weighted average; use NULL if nothing fills. All outcomes remain in the result, and unfilled shares are explicit. The books are already materialized. Changing `SIZE_SHARES` changes this SQL calculation, not the request population or recorded source. Average prices are derived ratios; source price/size and notional use decimal columns, while SQL division produces a floating-point ratio for display. The price-ladder figure uses **separate vertical scales**, zoomed to prices encountered within its displayed share range. This reveals local price steps; it does not make the two outcomes directly comparable on a common height. The tables and fill model retain all returned levels."
+    },
+    {
+      "cell": "26e196d5",
+      "before": "Experiment: increase requested size on the same recorded books Keep `DATA_MODE=\"replay\"` and change only `SIZE_SHARES` from **1,000 to 200,000**. Predict that filled shares cannot decrease, coverage percentage cannot increase, and the weighted average cannot improve while consuming asks in ascending price order. Inspect the partial-fill table and coverage chart rather than treating a reported average as a price for the entire request. The raw fingerprint, outcome IDs, source timestamps, source level counts and three-request audit must remain identical. The plot's horizontal view expands with the requested size; its price axis remains fixed. Restore **1,000** afterwards. This comparison isolates size against one displayed snapshot. It does not model future book changes, fees, market impact beyond those displayed levels, or the likelihood of either outcome.",
+      "after": "Experiment: increase requested size on the same recorded books Keep `DATA_MODE=\"replay\"` and change only `SIZE_SHARES` from **1,000 to 200,000**. Predict that filled shares cannot decrease, coverage percentage cannot increase, and the weighted average cannot improve while consuming asks in ascending price order. Inspect the partial-fill table and coverage chart rather than treating a reported average as a price for the entire request. The raw fingerprint, outcome IDs, source timestamps, source level counts and three-request audit must remain identical. The plot's horizontal view expands with the requested size. Each labeled vertical scale follows the prices visible within that range; the calculations still use all returned levels. Restore **1,000** afterwards. This comparison isolates size against one displayed snapshot. It does not model future book changes, fees, market impact beyond those displayed levels, or the likelihood of either outcome."
+    }
+  ],
+  "saved_html_tables": [
+    {
+      "cell": "5bf1124d",
+      "tables": 1,
+      "identical": true
+    },
+    {
+      "cell": "2a7cbb6c",
+      "tables": 1,
+      "identical": true
+    },
+    {
+      "cell": "6616c7bf",
+      "tables": 1,
+      "identical": true
+    },
+    {
+      "cell": "ac8d2740",
+      "tables": 1,
+      "identical": true
+    },
+    {
+      "cell": "e8ea5767",
+      "tables": 1,
+      "identical": true
+    },
+    {
+      "cell": "82405009",
+      "tables": 1,
+      "identical": true
+    }
+  ],
+  "fixtures": [
+    {
+      "path": "notebooks/fixtures/book-0.json",
+      "sha256": "46bb364e426ee51744bb76be3716f1464546f59331d73a4124e199285671d593"
+    },
+    {
+      "path": "notebooks/fixtures/book-1.json",
+      "sha256": "aeb59e8c54182686b0000f9e8cdf95c80b491782dee98f5c424ec664af1e9903"
+    },
+    {
+      "path": "notebooks/fixtures/manifest.json",
+      "sha256": "6131262bd5fd1d00a5b8a72dd7d5796d02d58cd06c1d2b72fce490989db39463"
+    },
+    {
+      "path": "notebooks/fixtures/market.json",
+      "sha256": "f37bac62bb790cb66800cfaa406315c62a36fd9bd7754e25e83da3fc69cc8e69"
+    }
+  ],
+  "frozen_companions_verified": 46
+}

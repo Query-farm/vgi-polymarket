@@ -1,0 +1,673 @@
+{
+  "query": "SELECT * FROM duckdb_functions() WHERE database_name='polymarket'",
+  "columns": [
+    "database_name",
+    "database_oid",
+    "schema_name",
+    "function_name",
+    "alias_of",
+    "function_type",
+    "description",
+    "comment",
+    "tags",
+    "return_type",
+    "parameters",
+    "parameter_types",
+    "varargs",
+    "macro_definition",
+    "has_side_effects",
+    "internal",
+    "extension_name",
+    "function_oid",
+    "examples",
+    "stability",
+    "categories"
+  ],
+  "rows": [
+    [
+      "polymarket",
+      "22595",
+      "main",
+      "quote",
+      null,
+      "table",
+      "Current best bid, best ask, midpoint and spread for one outcome",
+      null,
+      {
+        "vgi.category": "market-depth",
+        "vgi.doc_llm": "The current top of book for ONE OUTCOME TOKEN, in a single row: best bid, best ask, midpoint and spread. Takes a `token_id` from a market's `outcomes` list. This is the cheapest way to ask 'what is this outcome trading at right now' \u2014 prefer it over `orderbook()` when you do not need depth, and over the price columns on `markets()` when you need the number to be live rather than as of Gamma's last refresh.",
+        "vgi.doc_md": "One row per token, assembled from the CLOB's batched quote endpoints.\n\n### Midpoint is the number you usually want \u2014 if the spread is tight\n\n`midpoint` sits halfway between best bid and best ask and is what Polymarket displays as the price. Because a share pays $1 if its outcome happens, it reads as an implied probability: 0.62 is 62%.\n\n**Check `spread` before believing it.** A midpoint is only a forecast to the extent that someone is willing to trade near it. On a thin market the two sides can be almost unrelated \u2014 a real book quoted 0.020 bid against 0.990 ask, whose midpoint of 0.505 is not a coin flip but the average of two numbers nobody would trade at. That is why this function returns `spread` alongside `midpoint` rather than only the price: a wide spread means the number above it is noise, and `orderbook()` will show how little is resting behind it.\n\n### Naming\n\nThe CLOB reports quotes as `BUY` and `SELL`, and the mapping is the opposite of the obvious one: `BUY` is the best **bid** and `SELL` is the best **ask**, verified against the raw book. They are renamed here to the side of the book they actually sit on, so `best_ask >= best_bid` always holds and `spread` is never negative.\n\n### Cost under LATERAL\n\nTwo batched requests per 200 tokens regardless of how many rows drive it, so a quote across a whole topic is cheap.\n\n### Freshness\n\nThe CLOB declares no cacheability on quotes, so nothing here is cached. That is the honest policy for a top-of-book read: the number is only worth having if it is current.",
+        "vgi.example_queries": "[{\"description\": \"Live implied probability of every outcome in a topic\", \"sql\": \"SELECT m.question, o.outcome, q.midpoint, q.spread FROM polymarket.main.markets(tag_id => '21', closed => 'false', order_by => 'volume24hr', ascending => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, LATERAL polymarket.main.quote(o.token_id) q LIMIT 40\"}, {\"description\": \"The widest spreads among the 50 busiest open markets \\u2014 where liquidity is thin\", \"sql\": \"SELECT m.question, o.outcome, q.spread FROM (SELECT question, outcomes FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 50) m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, LATERAL polymarket.main.quote(o.token_id) q WHERE q.spread IS NOT NULL ORDER BY q.spread DESC LIMIT 20\"}]",
+        "vgi.result_columns_schema": "[{\"name\": \"token_id\", \"type\": \"VARCHAR\", \"description\": \"Outcome token quoted.\"}, {\"name\": \"best_bid\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Highest price a buyer is currently resting at.\"}, {\"name\": \"best_ask\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Lowest price a seller is currently resting at.\"}, {\"name\": \"midpoint\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Halfway between best bid and best ask; the usual 'the price' of an outcome.\"}, {\"name\": \"spread\", \"type\": \"DECIMAL(18,6)\", \"description\": \"best_ask minus best_bid; the cost of crossing the book.\"}, {\"name\": \"last_trade_price\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Price of the most recent execution on this token.\"}, {\"name\": \"min_order_size\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Smallest order this token's book accepts, in shares.\"}, {\"name\": \"tick_size\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Smallest price increment this token's book accepts.\"}]"
+      },
+      null,
+      [
+        "token_id"
+      ],
+      [
+        "VARCHAR"
+      ],
+      null,
+      null,
+      null,
+      true,
+      null,
+      22612,
+      [
+        "SELECT m.question, o.outcome, q.midpoint, q.spread FROM polymarket.main.markets(tag_id => '21', closed => 'false', order_by => 'volume24hr', ascending => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, LATERAL polymarket.main.quote(o.token_id) q LIMIT 40"
+      ],
+      null,
+      [
+        "market-data",
+        "blended"
+      ]
+    ],
+    [
+      "polymarket",
+      "22595",
+      "main",
+      "price_history",
+      null,
+      "table",
+      "How one outcome's price moved over time, as a sampled series",
+      null,
+      {
+        "vgi.category": "history",
+        "vgi.doc_llm": "The historical price series for ONE OUTCOME TOKEN \u2014 the time-series view. Reach for it to chart or backtest how an outcome's implied probability moved, rather than where it stands now. Takes a `token_id` from a market's `outcomes` list. Passing a condition id instead returns an EMPTY SERIES with no error, so an empty result usually means the wrong identifier rather than an untraded market.",
+        "vgi.doc_md": "A sampled price curve for one outcome token.\n\n### It takes a token id, and the failure is silent\n\nThe underlying parameter is called `market`, but it wants a **token id**. A condition id is answered with HTTP 200 and an empty history \u2014 indistinguishable from an outcome that never traded. Get the token from `unnest(markets.outcomes)`.\n\n### Not OHLC\n\nPolymarket publishes one price per sampled instant, so each row is a single `price` rather than a bar. `fidelity` is the gap between samples in minutes; `period` is how far back to look.\n\n### Window and caching\n\nEvery call ends at the present and requires both `period` and `fidelity`. The series therefore contains a still-forming final point and follows the origin's 90-second cache lifetime. Explicit start/end windows are not part of the SQL surface.\n\nRepeated observations with the same timestamp and exact numeric price within one response are returned once, preserving their first position. Conflicting prices at the same timestamp raise an error; the worker does not choose one. This normalization is local to each token response, without merging separate calls or rounding prices.\n\n### Prices are probabilities\n\nEach `price` is USDC per share between 0 and 1, so the curve reads as the market's implied probability over time. These are traded prices rather than a normalised display figure, so a flat stretch means nothing traded \u2014 not that the market held an opinion steady. Pair it with `quote()` if you need to know whether there is a market behind the curve right now.",
+        "vgi.example_queries": "[{\"description\": \"A week of hourly implied probability for the busiest open market\", \"sql\": \"SELECT h.ts, h.price FROM (SELECT o.token_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, LATERAL polymarket.main.price_history(t.token_id, '1w', 60) h ORDER BY h.ts\"}, {\"description\": \"How far each outcome moved over the last day\", \"sql\": \"SELECT o.outcome, max(h.price) - min(h.price) AS swing FROM (SELECT outcomes FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 3) m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, LATERAL polymarket.main.price_history(o.token_id, '1d', 60) h GROUP BY o.outcome ORDER BY swing DESC\"}, {\"description\": \"This week's movers: each outcome of the five busiest open markets, from the first point of its past-week hourly history to its live midpoint\", \"sql\": \"WITH tokens AS (SELECT m.question, o.outcome, o.token_id FROM (SELECT question, outcomes FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 5) m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o), week AS (SELECT t.question, t.outcome, t.token_id, arg_min(h.price, h.ts) AS first_price FROM tokens t, LATERAL polymarket.main.price_history(t.token_id, '1w', 60) h GROUP BY t.question, t.outcome, t.token_id) SELECT w.question, w.outcome, w.first_price, q.midpoint, q.midpoint - w.first_price AS change FROM week w, LATERAL polymarket.main.quote(w.token_id) q ORDER BY abs(change) DESC NULLS LAST, w.question, w.outcome\"}]",
+        "vgi.result_columns_schema": "[{\"name\": \"token_id\", \"type\": \"VARCHAR\", \"description\": \"Outcome token this series covers.\"}, {\"name\": \"ts\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"Instant this price was sampled at; the column to order and join on.\"}, {\"name\": \"price\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Price at that instant, 0 to 1, readable directly as the market's implied probability.\"}]"
+      },
+      null,
+      [
+        "token_id",
+        "period",
+        "fidelity"
+      ],
+      [
+        "VARCHAR",
+        "VARCHAR",
+        "BIGINT"
+      ],
+      null,
+      null,
+      null,
+      true,
+      null,
+      22611,
+      [
+        "SELECT h.ts, h.price FROM (SELECT o.token_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, LATERAL polymarket.main.price_history(t.token_id, '1w', 60) h ORDER BY h.ts",
+        "WITH tokens AS (SELECT m.question, o.outcome, o.token_id FROM (SELECT question, outcomes FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 5) m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o), week AS (SELECT t.question, t.outcome, t.token_id, arg_min(h.price, h.ts) AS first_price FROM tokens t, LATERAL polymarket.main.price_history(t.token_id, '1w', 60) h GROUP BY t.question, t.outcome, t.token_id) SELECT w.question, w.outcome, w.first_price, q.midpoint, q.midpoint - w.first_price AS change FROM week w, LATERAL polymarket.main.quote(w.token_id) q ORDER BY abs(change) DESC NULLS LAST, w.question, w.outcome"
+      ],
+      null,
+      [
+        "market-data",
+        "blended"
+      ]
+    ],
+    [
+      "polymarket",
+      "22595",
+      "main",
+      "positions",
+      null,
+      "table",
+      "Every open position one wallet holds, with its profit and loss",
+      null,
+      {
+        "vgi.category": "positions",
+        "vgi.doc_llm": "Every open position one wallet holds, with entry price, current value and unrealised P&L. Takes a wallet address \u2014 a THIRD key, distinct from both market identifiers \u2014 which you get from `holders()` or from the trader columns on `trades()`. This is the reverse of `holders()`: that answers 'who is in this market', this answers 'what else is this person in'. Reach for it to follow a large or successful trader across the whole site.",
+        "vgi.doc_md": "One row per open position, keyed on the holder's wallet.\n\n### The third key\n\nThis is the only function here keyed on a wallet address rather than on a market or an outcome. Get one from `holders()` (who is in this market) or from the `proxy_wallet` column of `trades()` (who just traded).\n\n### Closing the loop\n\n`holders()` goes market to wallet; this goes wallet to market. Chaining them is how you get from 'this market moved' to 'here is who moved it and what else they hold' \u2014 which is possible only because Polymarket settles on a public chain.\n\n### Reading the P&L\n\n`cash_pnl` is unrealised profit in USDC and `percent_pnl` is the same as a percentage \u2014 a percentage, not a fraction, so -44.5 means down 44.5%. `avg_price` against `cur_price` gives the direction directly, and both are probabilities between 0 and 1. `redeemable` marks a resolved market whose position can be cashed out.\n\n### Cross-API lifecycle\n\nThe Data API can retain a position after Gamma retires its catalog record. In that case the row remains valid here, but passing its `condition_id` to `market()` returns no row; use the denormalised `title` and `event_slug` carried by the position itself.\n\n### Freshness\n\nPolymarket declares `max-age=5` here, the shortest TTL it publishes anywhere, because a position's value moves with the market price.",
+        "vgi.example_queries": "[{\"description\": \"What else the biggest holder in a busy market is betting on\", \"sql\": \"SELECT p.title, p.outcome, p.size, p.cash_pnl FROM (SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC LIMIT 1) w, LATERAL polymarket.main.positions(w.proxy_wallet, 100) p ORDER BY p.current_value DESC\"}, {\"description\": \"How that holder's book is doing overall\", \"sql\": \"SELECT count(*) AS positions, sum(p.current_value) AS value, sum(p.cash_pnl) AS unrealised FROM (SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC LIMIT 1) w, LATERAL polymarket.main.positions(w.proxy_wallet, 100) p\"}]",
+        "vgi.result_columns_schema": "[{\"name\": \"proxy_wallet\", \"type\": \"VARCHAR\", \"description\": \"Address of the wallet holding this position.\"}, {\"name\": \"condition_id\", \"type\": \"VARCHAR\", \"description\": \"Market the position is in; the key trades() takes.\"}, {\"name\": \"token_id\", \"type\": \"VARCHAR\", \"description\": \"Outcome token held; the key orderbook() and quote() take.\"}, {\"name\": \"outcome\", \"type\": \"VARCHAR\", \"description\": \"Name of the outcome held, e.g. 'Yes'.\"}, {\"name\": \"outcome_index\", \"type\": \"INTEGER\", \"description\": \"Position of that outcome in the market's outcome list.\"}, {\"name\": \"title\", \"type\": \"VARCHAR\", \"description\": \"Question the market asks, denormalised onto each position.\"}, {\"name\": \"event_slug\", \"type\": \"VARCHAR\", \"description\": \"Slug of the event the market belongs to.\"}, {\"name\": \"size\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Shares of this outcome currently held.\"}, {\"name\": \"avg_price\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Average price paid per share, 0 to 1, in USDC.\"}, {\"name\": \"cur_price\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Current price per share, 0 to 1; compare with avg_price for direction.\"}, {\"name\": \"initial_value\", \"type\": \"DECIMAL(28,6)\", \"description\": \"USDC paid to open the position, net of fees.\"}, {\"name\": \"current_value\", \"type\": \"DECIMAL(28,6)\", \"description\": \"USDC the position is worth at the current price.\"}, {\"name\": \"cash_pnl\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Unrealised profit or loss in USDC; negative means a loss.\"}, {\"name\": \"percent_pnl\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Unrealised profit or loss as a percentage of what was paid.\"}, {\"name\": \"realized_pnl\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Profit or loss in USDC already taken by selling.\"}, {\"name\": \"total_bought\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Shares bought over the life of the position, before any sales.\"}, {\"name\": \"redeemable\", \"type\": \"BOOLEAN\", \"description\": \"Whether the market has resolved and the position can be cashed out.\"}, {\"name\": \"end_date\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the market is scheduled to resolve.\"}]"
+      },
+      null,
+      [
+        "proxy_wallet",
+        "max_rows"
+      ],
+      [
+        "VARCHAR",
+        "BIGINT"
+      ],
+      null,
+      null,
+      null,
+      true,
+      null,
+      22610,
+      [
+        "SELECT p.title, p.outcome, p.size, p.cash_pnl FROM (SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC LIMIT 1) w, LATERAL polymarket.main.positions(w.proxy_wallet, 100) p ORDER BY p.current_value DESC"
+      ],
+      null,
+      [
+        "market-data",
+        "blended"
+      ]
+    ],
+    [
+      "polymarket",
+      "22595",
+      "main",
+      "market",
+      null,
+      "table",
+      "Look up one Polymarket market by its on-chain condition id",
+      null,
+      {
+        "vgi.category": "markets",
+        "vgi.doc_llm": "A single market's current snapshot, by exact condition id. Use this when you already have a condition id \u2014 from a trade row, say \u2014 and want the question behind it; use `markets()` when you want to browse or filter. Same columns as `markets()`, so the two are interchangeable downstream, and unlike `markets()` this composes under a correlated LATERAL.",
+        "vgi.doc_md": "One row for one market, looked up by `condition_id`.\n\n### When to use this instead of `markets()`\n\n`markets()` is the browse path and streams a catalog; this is the point lookup, and it is the one that works as the inner side of a `LATERAL`. It is the natural way back from a trade or a holding to the question being traded.\n\n### Cost\n\nRequests are batched behind the scenes: Gamma accepts up to 60 condition ids per call, so a join over hundreds of markets costs a handful of requests, not hundreds.\n\n### An unknown id returns nothing\n\nGamma answers a filter that matches nothing with an empty list rather than a 404, so a condition id that does not exist produces no rows \u2014 the same as one that does exist but was filtered away.",
+        "vgi.example_queries": "[{\"description\": \"The question behind the busiest open market\", \"sql\": \"SELECT m.question, m.volume_24hr FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) t, LATERAL polymarket.main.market(t.condition_id) m\"}, {\"description\": \"Join a market's trade tape back to its question\", \"sql\": \"SELECT m.question, count(*) AS prints FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 3) s, LATERAL polymarket.main.market(s.condition_id) m, LATERAL polymarket.main.trades(s.condition_id, 100, '') t GROUP BY m.question\"}]",
+        "vgi.result_columns_schema": "[{\"name\": \"condition_id\", \"type\": \"VARCHAR\", \"description\": \"On-chain id of this market (0x + 64 hex). The key trades() and holders() take \\u2014 but NOT the key the order book takes, which is a token_id from `outcomes`.\"}, {\"name\": \"market_id\", \"type\": \"VARCHAR\", \"description\": \"Gamma's own numeric id for the market, as a string.\"}, {\"name\": \"slug\", \"type\": \"VARCHAR\", \"description\": \"URL slug on polymarket.com; also a filter argument on markets().\"}, {\"name\": \"question\", \"type\": \"VARCHAR\", \"description\": \"The question this market settles, e.g. 'Xi Jinping out before 2027?'.\"}, {\"name\": \"event_slug\", \"type\": \"VARCHAR\", \"description\": \"Slug of the event grouping this market with the others resolving alongside it.\"}, {\"name\": \"event_id\", \"type\": \"VARCHAR\", \"description\": \"Gamma id of that event; the key event() takes.\"}, {\"name\": \"outcomes\", \"type\": \"STRUCT(\\\"outcome_index\\\" INTEGER, \\\"outcome\\\" VARCHAR, \\\"token_id\\\" VARCHAR, \\\"price\\\" DECIMAL(18,6))[]\", \"description\": \"One entry per tradeable outcome: its name, its CLOB token_id, and its current price. Unnest this to reach orderbook(), which keys on token_id.\"}, {\"name\": \"active\", \"type\": \"BOOLEAN\", \"description\": \"Whether the market is live on the site. An inactive market is not necessarily closed.\"}, {\"name\": \"closed\", \"type\": \"BOOLEAN\", \"description\": \"Whether trading has ended. A closed market may not yet be resolved.\"}, {\"name\": \"archived\", \"type\": \"BOOLEAN\", \"description\": \"Whether Polymarket has archived the market out of its listings.\"}, {\"name\": \"accepting_orders\", \"type\": \"BOOLEAN\", \"description\": \"Whether the book is currently accepting orders; the closest thing to 'is it tradeable now'.\"}, {\"name\": \"enable_order_book\", \"type\": \"BOOLEAN\", \"description\": \"Whether this market trades on the CLOB at all.\"}, {\"name\": \"start_date\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the market opened for trading.\"}, {\"name\": \"end_date\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the market is scheduled to resolve.\"}, {\"name\": \"created_at\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the market was created in Gamma.\"}, {\"name\": \"updated_at\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When Gamma last modified this market's record.\"}, {\"name\": \"last_trade_price\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Price of the most recent trade, 0 to 1.\"}, {\"name\": \"best_bid\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Best resting bid on the first outcome's token.\"}, {\"name\": \"best_ask\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Best resting ask on the first outcome's token.\"}, {\"name\": \"spread\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Difference between best ask and best bid.\"}, {\"name\": \"volume\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Lifetime traded volume in USDC.\"}, {\"name\": \"volume_24hr\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Traded volume over the last 24 hours; the liquidity signal to filter on.\"}, {\"name\": \"volume_1wk\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Traded volume over the last week.\"}, {\"name\": \"volume_1mo\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Traded volume over the last month.\"}, {\"name\": \"liquidity\", \"type\": \"DECIMAL(28,6)\", \"description\": \"USDC resting in the order book on both sides.\"}, {\"name\": \"one_day_price_change\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Change in price over the last day, in dollars per share; negative when the price fell.\"}, {\"name\": \"one_week_price_change\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Change in price over the last week.\"}, {\"name\": \"order_price_min_tick_size\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Smallest price increment the book accepts, e.g. 0.001. Prices are exact multiples of this.\"}, {\"name\": \"order_min_size\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Smallest order the book accepts, in shares.\"}, {\"name\": \"neg_risk\", \"type\": \"BOOLEAN\", \"description\": \"Whether this market is part of a negative-risk (mutually exclusive) group.\"}, {\"name\": \"resolution_source\", \"type\": \"VARCHAR\", \"description\": \"What Polymarket settles the market against, when stated.\"}, {\"name\": \"description\", \"type\": \"VARCHAR\", \"description\": \"The full resolution criteria \\u2014 how the question is decided.\"}, {\"name\": \"competitive\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Polymarket's own 0-to-1 score for how contested the market is.\"}]"
+      },
+      null,
+      [
+        "condition_id"
+      ],
+      [
+        "VARCHAR"
+      ],
+      null,
+      null,
+      null,
+      true,
+      null,
+      22607,
+      [
+        "SELECT m.question, m.volume_24hr FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) t, LATERAL polymarket.main.market(t.condition_id) m"
+      ],
+      null,
+      [
+        "market-data",
+        "blended"
+      ]
+    ],
+    [
+      "polymarket",
+      "22595",
+      "main",
+      "event",
+      null,
+      "table",
+      "Look up one Polymarket event by its Gamma id",
+      null,
+      {
+        "vgi.category": "reference",
+        "vgi.doc_llm": "A single event by its exact Gamma id, with the same columns `events()` returns. Use this when you already hold an `event_id` \u2014 every market row carries one \u2014 and want the event's aggregate volume, its resolution date or its topic tags. `events()` is the browse path; this is the lookup, and this is the one that works under a correlated LATERAL.",
+        "vgi.doc_md": "One row for one event.\n\n### When to use this instead of `events()`\n\n`events()` streams a catalog and cannot be the inner side of a `LATERAL`. This fetches one event and can, so it is the way to go from a set of markets back up to the events they belong to.\n\n### What it does not return\n\nGamma's response also carries the event's markets \u2014 usually most of the payload. They are not returned here: `event_markets()` is the way to ask for those, and it reshapes them to the same columns `markets()` returns.\n\n### One request per row\n\nUnlike `market()`, this endpoint has no batch form, so a LATERAL costs one request per input row, so drive it from a bounded set rather than a whole catalog.",
+        "vgi.example_queries": "[{\"description\": \"The event behind the busiest open market\", \"sql\": \"SELECT e.title, e.volume_24hr, e.end_date FROM (SELECT event_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.event(m.event_id) e\"}, {\"description\": \"Open interest of the events behind the busiest markets\", \"sql\": \"SELECT DISTINCT e.title, e.open_interest FROM (SELECT event_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 5) m, LATERAL polymarket.main.event(m.event_id) e ORDER BY e.open_interest DESC NULLS LAST\"}]",
+        "vgi.result_columns_schema": "[{\"name\": \"event_id\", \"type\": \"VARCHAR\", \"description\": \"Gamma's numeric id for the event, as a string; the key event() takes.\"}, {\"name\": \"slug\", \"type\": \"VARCHAR\", \"description\": \"URL slug on polymarket.com; also a filter argument on markets().\"}, {\"name\": \"ticker\", \"type\": \"VARCHAR\", \"description\": \"Short label Polymarket uses for the event.\"}, {\"name\": \"title\", \"type\": \"VARCHAR\", \"description\": \"Question or headline the event asks.\"}, {\"name\": \"description\", \"type\": \"VARCHAR\", \"description\": \"Longer description of what the event covers.\"}, {\"name\": \"active\", \"type\": \"BOOLEAN\", \"description\": \"Whether the event is live on the site.\"}, {\"name\": \"closed\", \"type\": \"BOOLEAN\", \"description\": \"Whether every market under the event has stopped trading.\"}, {\"name\": \"archived\", \"type\": \"BOOLEAN\", \"description\": \"Whether Polymarket has archived the event out of its listings.\"}, {\"name\": \"featured\", \"type\": \"BOOLEAN\", \"description\": \"Whether Polymarket is featuring the event on its front page.\"}, {\"name\": \"neg_risk\", \"type\": \"BOOLEAN\", \"description\": \"Whether the markets under this event are mutually exclusive.\"}, {\"name\": \"market_count\", \"type\": \"INTEGER\", \"description\": \"How many markets sit under this event.\"}, {\"name\": \"start_date\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the event opened.\"}, {\"name\": \"end_date\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the event is scheduled to resolve.\"}, {\"name\": \"creation_date\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the event was created.\"}, {\"name\": \"updated_at\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When Gamma last modified this event's record.\"}, {\"name\": \"volume\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Lifetime traded volume across every market under the event, in USDC.\"}, {\"name\": \"volume_24hr\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Traded volume across the event over the last 24 hours.\"}, {\"name\": \"liquidity\", \"type\": \"DECIMAL(28,6)\", \"description\": \"USDC resting in the books of every market under the event.\"}, {\"name\": \"open_interest\", \"type\": \"DECIMAL(28,6)\", \"description\": \"USDC value of positions currently outstanding under the event.\"}, {\"name\": \"comment_count\", \"type\": \"INTEGER\", \"description\": \"Count of comments left on the event page.\"}, {\"name\": \"competitive\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Polymarket's own 0-to-1 score for how contested the event is.\"}, {\"name\": \"tags\", \"type\": \"STRUCT(\\\"tag_id\\\" VARCHAR, \\\"label\\\" VARCHAR, \\\"slug\\\" VARCHAR)[]\", \"description\": \"Topic tags on the event, each a {tag_id, label, slug} struct. Kept nested \\u2014 flattening would fan every event out into one row per tag.\"}]"
+      },
+      null,
+      [
+        "event_id"
+      ],
+      [
+        "VARCHAR"
+      ],
+      null,
+      null,
+      null,
+      true,
+      null,
+      22602,
+      [
+        "SELECT e.title, e.volume_24hr, e.end_date FROM (SELECT event_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.event(m.event_id) e"
+      ],
+      null,
+      [
+        "market-data",
+        "blended"
+      ]
+    ],
+    [
+      "polymarket",
+      "22595",
+      "main",
+      "orderbook",
+      null,
+      "table",
+      "Resting order-book depth for one outcome, one row per side and price level",
+      null,
+      {
+        "vgi.category": "market-depth",
+        "vgi.doc_llm": "Resting order-book depth for ONE OUTCOME TOKEN, flattened to one row per side and price level so it aggregates and joins like an ordinary table. Takes a `token_id` from a market's `outcomes` list \u2014 NOT a condition id, which is a 404 here. Reach for this to see liquidity behind the best quote: spread, depth at a price, or the shape of one side. For just the top of book use `quote()`, which is one row instead of many.",
+        "vgi.doc_md": "The CLOB returns a book as nested `bids` and `asks`; this flattens it to one row per (side, price level).\n\n### It takes a token id\n\nEach outcome of a market trades as its own token with its own book. Get the `token_id` from `unnest(markets.outcomes)`. A condition id here is an HTTP 404 \u2014 which at least fails loudly, unlike `price_history()`, where the same mistake returns an empty series.\n\n### Reading the two sides\n\n`bid` rows are buyers, `ask` rows are sellers, and the outcomes of a binary market mirror each other: a Yes bid at 0.40 is economically a No ask at 0.60. There is no `depth` argument: the batched endpoint returns the whole book either way, and SQL caps it exactly \u2014 `QUALIFY row_number() OVER (PARTITION BY side ORDER BY CASE WHEN side = 'bid' THEN -price ELSE price END) <= 5`. The side-aware ordering matters: best bids are highest, while best asks are lowest.\n\n### Cost under LATERAL\n\nBooks are fetched in batches of up to 200 tokens per request, which is what makes a join across a whole topic affordable: measured at 12.85s for 100 books individually against 0.16s batched. No query change is needed; it happens automatically.\n\n### An empty result\n\nA token with no resting orders contributes no rows, and so does a token the batch endpoint omits \u2014 both mean 'nothing is resting here'.",
+        "vgi.example_queries": "[{\"description\": \"Full depth on both sides of one outcome's book\", \"sql\": \"SELECT b.side, b.price, b.size FROM (SELECT o.token_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, LATERAL polymarket.main.orderbook(t.token_id) b ORDER BY b.side, b.price DESC\"}, {\"description\": \"Total resting size per side across a whole topic, in one query\", \"sql\": \"SELECT b.side, sum(b.size) AS resting FROM polymarket.main.markets(tag_id => '21', closed => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, LATERAL polymarket.main.orderbook(o.token_id) b GROUP BY b.side\"}]",
+        "vgi.result_columns_schema": "[{\"name\": \"token_id\", \"type\": \"VARCHAR\", \"description\": \"Outcome token this price level belongs to.\"}, {\"name\": \"condition_id\", \"type\": \"VARCHAR\", \"description\": \"Market that token belongs to, as the CLOB reports it.\"}, {\"name\": \"side\", \"type\": \"VARCHAR\", \"description\": \"Which side rests here: 'bid' (buyers) or 'ask' (sellers).\"}, {\"name\": \"price\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Price of this level, 0 to 1, in USDC per share.\"}, {\"name\": \"size\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Shares resting at this price level.\"}, {\"name\": \"book_timestamp\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the CLOB produced this snapshot of the book.\"}]"
+      },
+      null,
+      [
+        "token_id"
+      ],
+      [
+        "VARCHAR"
+      ],
+      null,
+      null,
+      null,
+      true,
+      null,
+      22609,
+      [
+        "SELECT b.side, sum(b.size) AS resting FROM polymarket.main.markets(tag_id => '21', closed => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, LATERAL polymarket.main.orderbook(o.token_id) b GROUP BY b.side"
+      ],
+      null,
+      [
+        "market-data",
+        "blended"
+      ]
+    ],
+    [
+      "polymarket",
+      "22595",
+      "main",
+      "markets",
+      null,
+      "table",
+      "Browse Polymarket's tradeable questions with their prices and volume",
+      null,
+      {
+        "vgi.category": "markets",
+        "vgi.doc_llm": "The entry point to Polymarket's market data: one row per tradeable question, with its current price, volume and lifecycle state. Reach for this to browse or filter \u2014 start from a `tag_id` out of the `tags` table, or pass `order_by => 'volume24hr'` to see what is busy right now. The `outcomes` column is the important one: it carries each outcome's `token_id`, which is what `orderbook()`, `quote()` and `price_history()` key on. The `condition_id` column is a DIFFERENT key, and is what `trades()` and `holders()` take. Passing one where the other belongs usually returns an empty result rather than an error.",
+        "vgi.doc_md": "Markets are the tradeable questions on Polymarket. Each has two or more outcomes, and each outcome trades as its own CLOB token.\n\n### The two identifiers\n\nThis is the thing to get right, because getting it wrong is usually silent:\n\n- `condition_id` (`0x` + 64 hex) identifies the **market**. `trades()` and `holders()` take it.\n- `token_id` (a long decimal string, inside `outcomes`) identifies **one outcome**. `orderbook()`, `quote()` and `price_history()` take it.\n\nBoth are called `market` in Polymarket's own URLs, which is where the confusion comes from.\n\n### Reading `outcomes`\n\nPolymarket sends outcome names, prices and token ids as three separate JSON-encoded strings whose only relationship is positional. They are zipped here into one list of structs so the correspondence cannot be got wrong. Reach the individual outcomes by unnesting that column in a LATERAL \u2014 the shipped example queries show the exact form, which needs `recursive := true` to expose the struct's fields as columns.\n\n### Prices are probabilities, where the market is liquid\n\nEvery price column is USDC per share between 0 and 1, and a share pays $1 if its outcome happens \u2014 so a price of 0.62 reads as a 62% implied probability. They are `DECIMAL`, never `DOUBLE`.\n\nThe prices inside `outcomes` are Polymarket's displayed figures, normalised to sum to 1 across a market's outcomes. That means they always *look* like a coherent forecast, even when nothing is resting on the book. Before treating one as a probability, check the real quote: `quote()` returns the `spread` and `orderbook()` the size behind it. A market quoting 0.02 bid against 0.99 ask has a displayed price and no market.\n\n### Streaming\n\nRows arrive one API page at a time, so a `LIMIT` stops early instead of paying for the whole catalog. The cost is that this cannot be the inner side of a correlated `LATERAL` \u2014 drive a join from it, not into it. Use `market()` for the per-row lookup.",
+        "vgi.example_queries": "[{\"description\": \"The busiest open markets right now, with their implied probabilities\", \"sql\": \"SELECT question, outcomes, volume_24hr FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 20\"}, {\"description\": \"Every outcome of every crypto market, one row per outcome\", \"sql\": \"SELECT m.question, o.outcome, o.price, o.token_id FROM polymarket.main.markets(tag_id => '21', closed => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o ORDER BY m.volume_24hr DESC LIMIT 50\"}]",
+        "vgi.result_columns_schema": "[{\"name\": \"condition_id\", \"type\": \"VARCHAR\", \"description\": \"On-chain id of this market (0x + 64 hex). The key trades() and holders() take \\u2014 but NOT the key the order book takes, which is a token_id from `outcomes`.\"}, {\"name\": \"market_id\", \"type\": \"VARCHAR\", \"description\": \"Gamma's own numeric id for the market, as a string.\"}, {\"name\": \"slug\", \"type\": \"VARCHAR\", \"description\": \"URL slug on polymarket.com; also a filter argument on markets().\"}, {\"name\": \"question\", \"type\": \"VARCHAR\", \"description\": \"The question this market settles, e.g. 'Xi Jinping out before 2027?'.\"}, {\"name\": \"event_slug\", \"type\": \"VARCHAR\", \"description\": \"Slug of the event grouping this market with the others resolving alongside it.\"}, {\"name\": \"event_id\", \"type\": \"VARCHAR\", \"description\": \"Gamma id of that event; the key event() takes.\"}, {\"name\": \"outcomes\", \"type\": \"STRUCT(\\\"outcome_index\\\" INTEGER, \\\"outcome\\\" VARCHAR, \\\"token_id\\\" VARCHAR, \\\"price\\\" DECIMAL(18,6))[]\", \"description\": \"One entry per tradeable outcome: its name, its CLOB token_id, and its current price. Unnest this to reach orderbook(), which keys on token_id.\"}, {\"name\": \"active\", \"type\": \"BOOLEAN\", \"description\": \"Whether the market is live on the site. An inactive market is not necessarily closed.\"}, {\"name\": \"closed\", \"type\": \"BOOLEAN\", \"description\": \"Whether trading has ended. A closed market may not yet be resolved.\"}, {\"name\": \"archived\", \"type\": \"BOOLEAN\", \"description\": \"Whether Polymarket has archived the market out of its listings.\"}, {\"name\": \"accepting_orders\", \"type\": \"BOOLEAN\", \"description\": \"Whether the book is currently accepting orders; the closest thing to 'is it tradeable now'.\"}, {\"name\": \"enable_order_book\", \"type\": \"BOOLEAN\", \"description\": \"Whether this market trades on the CLOB at all.\"}, {\"name\": \"start_date\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the market opened for trading.\"}, {\"name\": \"end_date\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the market is scheduled to resolve.\"}, {\"name\": \"created_at\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the market was created in Gamma.\"}, {\"name\": \"updated_at\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When Gamma last modified this market's record.\"}, {\"name\": \"last_trade_price\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Price of the most recent trade, 0 to 1.\"}, {\"name\": \"best_bid\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Best resting bid on the first outcome's token.\"}, {\"name\": \"best_ask\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Best resting ask on the first outcome's token.\"}, {\"name\": \"spread\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Difference between best ask and best bid.\"}, {\"name\": \"volume\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Lifetime traded volume in USDC.\"}, {\"name\": \"volume_24hr\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Traded volume over the last 24 hours; the liquidity signal to filter on.\"}, {\"name\": \"volume_1wk\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Traded volume over the last week.\"}, {\"name\": \"volume_1mo\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Traded volume over the last month.\"}, {\"name\": \"liquidity\", \"type\": \"DECIMAL(28,6)\", \"description\": \"USDC resting in the order book on both sides.\"}, {\"name\": \"one_day_price_change\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Change in price over the last day, in dollars per share; negative when the price fell.\"}, {\"name\": \"one_week_price_change\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Change in price over the last week.\"}, {\"name\": \"order_price_min_tick_size\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Smallest price increment the book accepts, e.g. 0.001. Prices are exact multiples of this.\"}, {\"name\": \"order_min_size\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Smallest order the book accepts, in shares.\"}, {\"name\": \"neg_risk\", \"type\": \"BOOLEAN\", \"description\": \"Whether this market is part of a negative-risk (mutually exclusive) group.\"}, {\"name\": \"resolution_source\", \"type\": \"VARCHAR\", \"description\": \"What Polymarket settles the market against, when stated.\"}, {\"name\": \"description\", \"type\": \"VARCHAR\", \"description\": \"The full resolution criteria \\u2014 how the question is decided.\"}, {\"name\": \"competitive\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Polymarket's own 0-to-1 score for how contested the market is.\"}]"
+      },
+      null,
+      [
+        "tag_id",
+        "slug",
+        "closed",
+        "order_by",
+        "condition_id",
+        "ascending",
+        "active"
+      ],
+      [
+        "VARCHAR",
+        "VARCHAR",
+        "VARCHAR",
+        "VARCHAR",
+        "VARCHAR",
+        "VARCHAR",
+        "VARCHAR"
+      ],
+      null,
+      null,
+      null,
+      true,
+      null,
+      22608,
+      [
+        "SELECT question, outcomes, volume_24hr FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 20"
+      ],
+      null,
+      [
+        "market-data"
+      ]
+    ],
+    [
+      "polymarket",
+      "22595",
+      "main",
+      "trades",
+      null,
+      "table",
+      "Executed trades on one Polymarket market, with the trader behind each",
+      null,
+      {
+        "vgi.category": "history",
+        "vgi.doc_llm": "Individual executed trades on ONE MARKET \u2014 the public tape, newest first. Takes a `condition_id`, NOT a token id: a token id here is rejected with an error. Reach for this when you need actual prints rather than quotes: trade-by-trade flow, taker direction, a volume-weighted price, or WHO traded \u2014 each row carries the counterparty's wallet and profile name, because Polymarket settles on a public chain.",
+        "vgi.doc_md": "One row per execution, with the trader attached.\n\n### It takes a condition id\n\nThis is the Data API, which keys on the market rather than the outcome. A token id is rejected with HTTP 400 (`invalid condition id`). Each row's `token_id` column tells you which outcome changed hands.\n\n### Public counterparties\n\n`proxy_wallet`, `trader_name` and `pseudonym` identify the taker. This is ordinary public chain data, and it is what makes flow analysis possible here in a way it is not on a conventional exchange.\n\n### Volume\n\nAn active market can have a very long tape, which is why `max_rows` is required rather than defaulted \u2014 the call should say how much it wants, up to 10,000 trades per call.\n\n### Prices arrive as floats\n\nThe Data API sends price and size as JSON numbers rather than strings. They are recovered to exact `DECIMAL` through the shortest round-tripping representation, so a 0.955 print reads as 0.955 and not as 0.9549999999.",
+        "vgi.example_queries": "[{\"description\": \"The most recent prints on the busiest open market\", \"sql\": \"SELECT t.ts, t.side, t.outcome, t.price, t.size, t.trader_name FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.trades(m.condition_id, 100, '') t ORDER BY t.ts DESC\"}, {\"description\": \"Volume-weighted average price by outcome, from the tape\", \"sql\": \"SELECT t.outcome, sum(t.price * t.size) / sum(t.size) AS vwap FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.trades(m.condition_id, 100, '') t GROUP BY t.outcome\"}]",
+        "vgi.result_columns_schema": "[{\"name\": \"transaction_hash\", \"type\": \"VARCHAR\", \"description\": \"On-chain transaction that settled this trade.\"}, {\"name\": \"condition_id\", \"type\": \"VARCHAR\", \"description\": \"Market the trade executed on.\"}, {\"name\": \"token_id\", \"type\": \"VARCHAR\", \"description\": \"Outcome token that changed hands.\"}, {\"name\": \"outcome\", \"type\": \"VARCHAR\", \"description\": \"Name of that outcome, e.g. 'Yes'.\"}, {\"name\": \"outcome_index\", \"type\": \"INTEGER\", \"description\": \"Position of that outcome in the market's outcome list.\"}, {\"name\": \"side\", \"type\": \"VARCHAR\", \"description\": \"Direction the taker went: 'BUY' or 'SELL'.\"}, {\"name\": \"price\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Execution price, 0 to 1, in USDC per share.\"}, {\"name\": \"size\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Shares exchanged.\"}, {\"name\": \"ts\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the trade executed; the cursor to poll on.\"}, {\"name\": \"proxy_wallet\", \"type\": \"VARCHAR\", \"description\": \"Address of the trader's Polymarket proxy wallet.\"}, {\"name\": \"trader_name\", \"type\": \"VARCHAR\", \"description\": \"Display name the trader has set, when they have one.\"}, {\"name\": \"pseudonym\", \"type\": \"VARCHAR\", \"description\": \"Polymarket's generated pseudonym for the trader.\"}, {\"name\": \"title\", \"type\": \"VARCHAR\", \"description\": \"Question the market asks, denormalised onto each trade by the API.\"}, {\"name\": \"event_slug\", \"type\": \"VARCHAR\", \"description\": \"Slug of the event the market belongs to.\"}]"
+      },
+      null,
+      [
+        "condition_id",
+        "max_rows",
+        "side"
+      ],
+      [
+        "VARCHAR",
+        "BIGINT",
+        "VARCHAR"
+      ],
+      null,
+      null,
+      null,
+      true,
+      null,
+      22614,
+      [
+        "SELECT t.ts, t.side, t.outcome, t.price, t.size, t.trader_name FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.trades(m.condition_id, 100, '') t ORDER BY t.ts DESC"
+      ],
+      null,
+      [
+        "market-data",
+        "blended"
+      ]
+    ],
+    [
+      "polymarket",
+      "22595",
+      "main",
+      "events",
+      null,
+      "table",
+      "Browse the events that group Polymarket's markets by resolution",
+      null,
+      {
+        "vgi.category": "reference",
+        "vgi.doc_llm": "The layer between a topic and its markets: one row per event, with its aggregate volume, liquidity, open interest and topic tags. Reach for this to find a specific `event_id` \u2014 which `event_markets()` takes to return that event's markets \u2014 or to compare whole events rather than individual questions. An event groups the markets that resolve together: one NFL game, or one election with a market per candidate.",
+        "vgi.doc_md": "An event groups the markets that resolve together. A single-question event has one market under it; an election event has one per candidate.\n\n### Narrowing from here\n\nTake an `event_id` and pass it to `event_markets()` to get that event's markets. There is deliberately no `event_slug` filter on `markets()`: `/markets/keyset` has no such parameter, and Gamma answers an unrecognised filter by ignoring it and returning everything, so offering one would silently return the wrong rows.\n\n### Tags stay nested\n\n`tags` is a list of `{tag_id, label, slug}` structs \u2014 flattening it would fan every event out into one row per tag. `unnest` the column when you do want that shape.\n\n### Money is float-encoded here\n\nGamma sends event-level volume and liquidity as JSON numbers where the market level sends the same quantities as strings. Both are carried to `DECIMAL` through the same converter, so the two levels compare exactly.\n\n### Paging\n\nRows stream a page at a time, so a `LIMIT` stops early. Gamma clamps the page size to 100 silently rather than erroring on a larger request.",
+        "vgi.example_queries": "[{\"description\": \"The biggest open events by 24-hour volume\", \"sql\": \"SELECT slug, title, volume_24hr, liquidity FROM polymarket.main.events(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 20\"}, {\"description\": \"Which topics an event is filed under, one row per tag\", \"sql\": \"SELECT e.title, (unnest(e.tags)).label AS topic FROM polymarket.main.events(closed => 'false', order_by => 'volume24hr', ascending => 'false') e LIMIT 40\"}]",
+        "vgi.result_columns_schema": "[{\"name\": \"event_id\", \"type\": \"VARCHAR\", \"description\": \"Gamma's numeric id for the event, as a string; the key event() takes.\"}, {\"name\": \"slug\", \"type\": \"VARCHAR\", \"description\": \"URL slug on polymarket.com; also a filter argument on markets().\"}, {\"name\": \"ticker\", \"type\": \"VARCHAR\", \"description\": \"Short label Polymarket uses for the event.\"}, {\"name\": \"title\", \"type\": \"VARCHAR\", \"description\": \"Question or headline the event asks.\"}, {\"name\": \"description\", \"type\": \"VARCHAR\", \"description\": \"Longer description of what the event covers.\"}, {\"name\": \"active\", \"type\": \"BOOLEAN\", \"description\": \"Whether the event is live on the site.\"}, {\"name\": \"closed\", \"type\": \"BOOLEAN\", \"description\": \"Whether every market under the event has stopped trading.\"}, {\"name\": \"archived\", \"type\": \"BOOLEAN\", \"description\": \"Whether Polymarket has archived the event out of its listings.\"}, {\"name\": \"featured\", \"type\": \"BOOLEAN\", \"description\": \"Whether Polymarket is featuring the event on its front page.\"}, {\"name\": \"neg_risk\", \"type\": \"BOOLEAN\", \"description\": \"Whether the markets under this event are mutually exclusive.\"}, {\"name\": \"market_count\", \"type\": \"INTEGER\", \"description\": \"How many markets sit under this event.\"}, {\"name\": \"start_date\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the event opened.\"}, {\"name\": \"end_date\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the event is scheduled to resolve.\"}, {\"name\": \"creation_date\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the event was created.\"}, {\"name\": \"updated_at\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When Gamma last modified this event's record.\"}, {\"name\": \"volume\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Lifetime traded volume across every market under the event, in USDC.\"}, {\"name\": \"volume_24hr\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Traded volume across the event over the last 24 hours.\"}, {\"name\": \"liquidity\", \"type\": \"DECIMAL(28,6)\", \"description\": \"USDC resting in the books of every market under the event.\"}, {\"name\": \"open_interest\", \"type\": \"DECIMAL(28,6)\", \"description\": \"USDC value of positions currently outstanding under the event.\"}, {\"name\": \"comment_count\", \"type\": \"INTEGER\", \"description\": \"Count of comments left on the event page.\"}, {\"name\": \"competitive\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Polymarket's own 0-to-1 score for how contested the event is.\"}, {\"name\": \"tags\", \"type\": \"STRUCT(\\\"tag_id\\\" VARCHAR, \\\"label\\\" VARCHAR, \\\"slug\\\" VARCHAR)[]\", \"description\": \"Topic tags on the event, each a {tag_id, label, slug} struct. Kept nested \\u2014 flattening would fan every event out into one row per tag.\"}]"
+      },
+      null,
+      [
+        "tag_id",
+        "slug",
+        "closed",
+        "order_by",
+        "title_search",
+        "featured",
+        "series_slug",
+        "ascending"
+      ],
+      [
+        "VARCHAR",
+        "VARCHAR",
+        "VARCHAR",
+        "VARCHAR",
+        "VARCHAR",
+        "VARCHAR",
+        "VARCHAR",
+        "VARCHAR"
+      ],
+      null,
+      null,
+      null,
+      true,
+      null,
+      22604,
+      [
+        "SELECT slug, title, volume_24hr, liquidity FROM polymarket.main.events(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 20"
+      ],
+      null,
+      [
+        "market-data"
+      ]
+    ],
+    [
+      "polymarket",
+      "22595",
+      "main",
+      "all_tags",
+      null,
+      "table",
+      "Every Polymarket topic tag (the scan backing the `tags` table)",
+      null,
+      {
+        "vgi.category": "reference",
+        "vgi.doc_llm": "Every topic tag on Polymarket, as a function. Prefer the `tags` table, which scans this and reads as plain SQL; this form exists for the rare case you want the scan itself. Either way it is the discovery starting point: `tag_id` is the filter both `markets()` and `events()` accept, and it is the only way to ask for 'everything about crypto' rather than naming markets one at a time.",
+        "vgi.doc_md": "Polymarket's topic axis \u2014 roughly 7,300 tags, streamed a page at a time.\n\n### Prefer the table\n\nThe `tags` catalog table is backed by this function, so it can be selected from directly, without parentheses. This function returns exactly the same rows; it is named `all_tags` only so that the function and the table it backs can coexist in one schema.\n\n### The long tail is real\n\nA few dozen tags carry nearly all the volume (`Crypto`, `Politics`, `Sports`), and the rest are narrow one-off labels left over from individual events. Match on `label` or `slug` when you know the topic you want; scanning for a tag by eye is not rewarding.\n\n### Where to go next\n\nTake a `tag_id` and pass it to `markets()` or `events()`.",
+        "vgi.example_queries": "[{\"description\": \"Find the tag id for a topic, read from the scan function\", \"sql\": \"SELECT tag_id, label, slug FROM polymarket.main.all_tags() WHERE label ILIKE '%crypto%' ORDER BY label\"}]",
+        "vgi.result_columns_schema": "[{\"name\": \"tag_id\", \"type\": \"VARCHAR\", \"description\": \"Gamma's numeric id for the tag, as a string; the key markets() filters on.\"}, {\"name\": \"label\", \"type\": \"VARCHAR\", \"description\": \"Display name of the tag, e.g. 'Crypto' or 'Politics'.\"}, {\"name\": \"slug\", \"type\": \"VARCHAR\", \"description\": \"URL slug for the tag.\"}, {\"name\": \"created_at\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the tag was created.\"}, {\"name\": \"updated_at\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When Gamma last modified the tag.\"}, {\"name\": \"published_at\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the tag was published, when it has been.\"}]"
+      },
+      null,
+      [],
+      [],
+      null,
+      null,
+      null,
+      true,
+      null,
+      22601,
+      [
+        "SELECT tag_id, label, slug FROM polymarket.main.all_tags() WHERE label ILIKE '%crypto%' ORDER BY label"
+      ],
+      null,
+      [
+        "reference"
+      ]
+    ],
+    [
+      "polymarket",
+      "22595",
+      "main",
+      "holders",
+      null,
+      "table",
+      "Who holds the largest positions in one Polymarket market",
+      null,
+      {
+        "vgi.category": "positions",
+        "vgi.doc_llm": "The largest position holders in ONE MARKET, one row per holder per outcome. Takes a `condition_id`, like `trades()` and unlike the order book. This has no equivalent on a conventional exchange: Polymarket settles on a public chain, so who is holding what is public. Reach for it to ask who is on each side of a question, or how concentrated a position is.",
+        "vgi.doc_md": "One row per holder per outcome, ranked by size.\n\n### Why this exists at all\n\nPositions are on-chain, so the holder list is public data rather than something an exchange chooses to publish. There is no equivalent on Kalshi or a conventional venue.\n\n### Shape\n\nThe API groups holders under each outcome token; that grouping is flattened here and the `token_id` stamped onto every row, so a holder row can say which side of the question it is a position in. `amount` is shares of that outcome, and each share pays $1 if the outcome happens.\n\n### Concentration\n\nSumming `amount` by `token_id` and comparing the top holder to the rest is the usual way to ask whether a price is one whale's opinion or a crowd's.",
+        "vgi.example_queries": "[{\"description\": \"The biggest positions in the busiest open market\", \"sql\": \"SELECT h.outcome_index, h.holder_name, h.amount FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC\"}, {\"description\": \"How concentrated each side of a market is\", \"sql\": \"SELECT h.token_id, count(*) AS holders, sum(h.amount) AS shares, max(h.amount) / sum(h.amount) AS top_holder_share FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.holders(m.condition_id, 20) h GROUP BY h.token_id\"}, {\"description\": \"What the busiest open market's largest holders' stakes are worth at each outcome's live midpoint\", \"sql\": \"SELECT h.outcome_index, h.holder_name, h.amount, q.midpoint, h.amount * q.midpoint AS marked_value FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.holders(m.condition_id, 20) h, LATERAL polymarket.main.quote(h.token_id) q ORDER BY marked_value DESC\"}]",
+        "vgi.result_columns_schema": "[{\"name\": \"condition_id\", \"type\": \"VARCHAR\", \"description\": \"Market these positions are in.\"}, {\"name\": \"token_id\", \"type\": \"VARCHAR\", \"description\": \"Outcome token held.\"}, {\"name\": \"outcome_index\", \"type\": \"INTEGER\", \"description\": \"Position of that outcome in the market's outcome list.\"}, {\"name\": \"proxy_wallet\", \"type\": \"VARCHAR\", \"description\": \"Address of the holder's Polymarket proxy wallet.\"}, {\"name\": \"amount\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Shares of this outcome held.\"}, {\"name\": \"holder_name\", \"type\": \"VARCHAR\", \"description\": \"Display name the holder has set, when they have one.\"}, {\"name\": \"pseudonym\", \"type\": \"VARCHAR\", \"description\": \"Polymarket's generated pseudonym for the holder.\"}, {\"name\": \"bio\", \"type\": \"VARCHAR\", \"description\": \"Profile text the holder has written.\"}, {\"name\": \"verified\", \"type\": \"BOOLEAN\", \"description\": \"Whether Polymarket has verified this account.\"}]"
+      },
+      null,
+      [
+        "condition_id",
+        "max_rows"
+      ],
+      [
+        "VARCHAR",
+        "BIGINT"
+      ],
+      null,
+      null,
+      null,
+      true,
+      null,
+      22606,
+      [
+        "SELECT h.outcome_index, h.holder_name, h.amount FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC",
+        "SELECT h.outcome_index, h.holder_name, h.amount, q.midpoint, h.amount * q.midpoint AS marked_value FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.holders(m.condition_id, 20) h, LATERAL polymarket.main.quote(h.token_id) q ORDER BY marked_value DESC"
+      ],
+      null,
+      [
+        "market-data",
+        "blended"
+      ]
+    ],
+    [
+      "polymarket",
+      "22595",
+      "main",
+      "event_markets",
+      null,
+      "table",
+      "Every tradeable market grouped under one Polymarket event",
+      null,
+      {
+        "vgi.category": "markets",
+        "vgi.doc_llm": "The markets under one event, by event id \u2014 an election's candidates, a game's outcomes. Returns exactly the columns `markets()` does, so it is interchangeable downstream, and unlike `markets()` it composes under a correlated LATERAL. This is the ONLY way to get an event's markets: `markets()` has no event filter, because Gamma's market endpoint does not offer one.",
+        "vgi.doc_md": "One row per market under one event, in `markets()`' columns.\n\n### Why this is a separate function\n\n`/markets/keyset` has no event parameter. Gamma ignores query parameters it does not recognise and answers with the unfiltered first page, so an `event_slug` argument on `markets()` would return the wrong rows with no error at all. The event's own payload carries its markets, so they are read from there instead.\n\n### Composing\n\nDrive it from `events()` to expand a set of events into their markets, then `unnest(outcomes)` to reach the tokens the order book keys on.\n\n### One request per row\n\nThere is no batch form, so a LATERAL costs one request per event. Pass a bounded set of events rather than a whole catalog.",
+        "vgi.example_queries": "[{\"description\": \"Every candidate market under the biggest open event\", \"sql\": \"SELECT m.question, m.outcomes, m.volume_24hr FROM (SELECT event_id FROM polymarket.main.events(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) e, LATERAL polymarket.main.event_markets(e.event_id) m ORDER BY m.volume_24hr DESC NULLS LAST\"}, {\"description\": \"How many markets each of the busiest events carries\", \"sql\": \"SELECT e.title, count(*) AS markets FROM (SELECT event_id, title FROM polymarket.main.events(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 5) e, LATERAL polymarket.main.event_markets(e.event_id) m GROUP BY e.title ORDER BY markets DESC\"}]",
+        "vgi.result_columns_schema": "[{\"name\": \"condition_id\", \"type\": \"VARCHAR\", \"description\": \"On-chain id of this market (0x + 64 hex). The key trades() and holders() take \\u2014 but NOT the key the order book takes, which is a token_id from `outcomes`.\"}, {\"name\": \"market_id\", \"type\": \"VARCHAR\", \"description\": \"Gamma's own numeric id for the market, as a string.\"}, {\"name\": \"slug\", \"type\": \"VARCHAR\", \"description\": \"URL slug on polymarket.com; also a filter argument on markets().\"}, {\"name\": \"question\", \"type\": \"VARCHAR\", \"description\": \"The question this market settles, e.g. 'Xi Jinping out before 2027?'.\"}, {\"name\": \"event_slug\", \"type\": \"VARCHAR\", \"description\": \"Slug of the event grouping this market with the others resolving alongside it.\"}, {\"name\": \"event_id\", \"type\": \"VARCHAR\", \"description\": \"Gamma id of that event; the key event() takes.\"}, {\"name\": \"outcomes\", \"type\": \"STRUCT(\\\"outcome_index\\\" INTEGER, \\\"outcome\\\" VARCHAR, \\\"token_id\\\" VARCHAR, \\\"price\\\" DECIMAL(18,6))[]\", \"description\": \"One entry per tradeable outcome: its name, its CLOB token_id, and its current price. Unnest this to reach orderbook(), which keys on token_id.\"}, {\"name\": \"active\", \"type\": \"BOOLEAN\", \"description\": \"Whether the market is live on the site. An inactive market is not necessarily closed.\"}, {\"name\": \"closed\", \"type\": \"BOOLEAN\", \"description\": \"Whether trading has ended. A closed market may not yet be resolved.\"}, {\"name\": \"archived\", \"type\": \"BOOLEAN\", \"description\": \"Whether Polymarket has archived the market out of its listings.\"}, {\"name\": \"accepting_orders\", \"type\": \"BOOLEAN\", \"description\": \"Whether the book is currently accepting orders; the closest thing to 'is it tradeable now'.\"}, {\"name\": \"enable_order_book\", \"type\": \"BOOLEAN\", \"description\": \"Whether this market trades on the CLOB at all.\"}, {\"name\": \"start_date\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the market opened for trading.\"}, {\"name\": \"end_date\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the market is scheduled to resolve.\"}, {\"name\": \"created_at\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the market was created in Gamma.\"}, {\"name\": \"updated_at\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When Gamma last modified this market's record.\"}, {\"name\": \"last_trade_price\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Price of the most recent trade, 0 to 1.\"}, {\"name\": \"best_bid\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Best resting bid on the first outcome's token.\"}, {\"name\": \"best_ask\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Best resting ask on the first outcome's token.\"}, {\"name\": \"spread\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Difference between best ask and best bid.\"}, {\"name\": \"volume\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Lifetime traded volume in USDC.\"}, {\"name\": \"volume_24hr\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Traded volume over the last 24 hours; the liquidity signal to filter on.\"}, {\"name\": \"volume_1wk\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Traded volume over the last week.\"}, {\"name\": \"volume_1mo\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Traded volume over the last month.\"}, {\"name\": \"liquidity\", \"type\": \"DECIMAL(28,6)\", \"description\": \"USDC resting in the order book on both sides.\"}, {\"name\": \"one_day_price_change\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Change in price over the last day, in dollars per share; negative when the price fell.\"}, {\"name\": \"one_week_price_change\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Change in price over the last week.\"}, {\"name\": \"order_price_min_tick_size\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Smallest price increment the book accepts, e.g. 0.001. Prices are exact multiples of this.\"}, {\"name\": \"order_min_size\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Smallest order the book accepts, in shares.\"}, {\"name\": \"neg_risk\", \"type\": \"BOOLEAN\", \"description\": \"Whether this market is part of a negative-risk (mutually exclusive) group.\"}, {\"name\": \"resolution_source\", \"type\": \"VARCHAR\", \"description\": \"What Polymarket settles the market against, when stated.\"}, {\"name\": \"description\", \"type\": \"VARCHAR\", \"description\": \"The full resolution criteria \\u2014 how the question is decided.\"}, {\"name\": \"competitive\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Polymarket's own 0-to-1 score for how contested the market is.\"}]"
+      },
+      null,
+      [
+        "event_id"
+      ],
+      [
+        "VARCHAR"
+      ],
+      null,
+      null,
+      null,
+      true,
+      null,
+      22603,
+      [
+        "SELECT m.question, m.outcomes, m.volume_24hr FROM (SELECT event_id FROM polymarket.main.events(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) e, LATERAL polymarket.main.event_markets(e.event_id) m ORDER BY m.volume_24hr DESC NULLS LAST"
+      ],
+      null,
+      [
+        "market-data",
+        "blended"
+      ]
+    ],
+    [
+      "polymarket",
+      "22595",
+      "main",
+      "fill_price",
+      null,
+      "table",
+      "Displayed-book fill price and slippage for a given order size, before fees",
+      null,
+      {
+        "vgi.category": "market-depth",
+        "vgi.doc_llm": "The price a given order size would actually get, having consumed the resting book level by level. Takes a `token_id`, a side, and a share count. Reach for this instead of `quote()` whenever size matters: a market can quote a one-tick spread and hold fifteen shares behind it, so the midpoint is a real price at which almost nothing trades. `avg_price` is what the position costs per share, `slippage` is what the size cost over the touch, and `fully_filled` says whether the book could cover the request at all. Values are pre-fee: this function models displayed liquidity, not venue fees.",
+        "vgi.doc_md": "One row per request, computed from the same batched book `orderbook()` returns \u2014 so it costs no extra call when driven alongside it.\n\n### Why the touch is not enough\n\nSpread measures the distance between the best bid and the best ask. It says nothing about how much is standing there. A live market quoted a 0.001 spread on 15 shares; another quoted 0.97 on a book with one order a side. Neither number tells you what a position would cost, and this does.\n\n### Reading the result\n\n`avg_price` is size-weighted across every level consumed. `slippage` is the distance from the touch, signed so that it is always the cost of size rather than a direction \u2014 never negative. `fully_filled = false` means the book ran out: the row prices the portion that could fill, and the rest of the order would move the price further than this reports. `notional` and `avg_price` are computed from displayed book levels before any applicable venue fees.\n\n### Sizing a strategy\n\nComparing `avg_price` across candidates at the size you actually intend to trade is a different ranking from comparing midpoints, and it is the one that survives contact with the book.",
+        "vgi.example_queries": "[{\"description\": \"Displayed-book cost of 5,000 shares on the busiest market, before fees\", \"sql\": \"SELECT f.side, f.avg_price, f.touch_price, f.slippage, f.fully_filled FROM (SELECT o.token_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, LATERAL polymarket.main.fill_price(t.token_id, 'buy', 5000) f\"}, {\"description\": \"Which outcomes in a topic can absorb real size, and which cannot\", \"sql\": \"SELECT m.question, o.outcome, f.avg_price, f.filled_size, f.fully_filled FROM polymarket.main.markets(tag_id => '21', closed => 'false', order_by => 'volume24hr', ascending => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o, LATERAL polymarket.main.fill_price(o.token_id, 'buy', 10000) f WHERE NOT f.fully_filled LIMIT 20\"}]",
+        "vgi.result_columns_schema": "[{\"name\": \"token_id\", \"type\": \"VARCHAR\", \"description\": \"Outcome token the order would trade.\"}, {\"name\": \"side\", \"type\": \"VARCHAR\", \"description\": \"Direction priced: 'buy' consumes asks, 'sell' consumes bids.\"}, {\"name\": \"requested_size\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Shares asked for.\"}, {\"name\": \"filled_size\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Shares the resting book could actually supply.\"}, {\"name\": \"fully_filled\", \"type\": \"BOOLEAN\", \"description\": \"Whether the book covered the whole request. False means the rest of the order would move the price further than this row reports.\"}, {\"name\": \"avg_price\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Size-weighted average price across every level consumed, before any applicable venue fees \\u2014 the displayed-book fill price rather than the touch.\"}, {\"name\": \"worst_price\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Price of the last level consumed; the far edge of the fill.\"}, {\"name\": \"touch_price\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Best price on that side, for comparison with avg_price.\"}, {\"name\": \"slippage\", \"type\": \"DECIMAL(18,6)\", \"description\": \"avg_price minus touch_price for a buy, reversed for a sell. Always the cost of size, so never negative.\"}, {\"name\": \"levels_consumed\", \"type\": \"INTEGER\", \"description\": \"How many price levels the order would clear.\"}, {\"name\": \"notional\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Pre-fee USDC notional of the filled portion.\"}]"
+      },
+      null,
+      [
+        "token_id",
+        "side",
+        "size"
+      ],
+      [
+        "VARCHAR",
+        "VARCHAR",
+        "BIGINT"
+      ],
+      null,
+      null,
+      null,
+      true,
+      null,
+      22605,
+      [
+        "SELECT f.side, f.avg_price, f.touch_price, f.slippage, f.fully_filled FROM (SELECT o.token_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') m, LATERAL (SELECT unnest(m.outcomes, recursive := true)) o LIMIT 1) t, LATERAL polymarket.main.fill_price(t.token_id, 'buy', 5000) f"
+      ],
+      null,
+      [
+        "market-data",
+        "blended"
+      ]
+    ],
+    [
+      "polymarket",
+      "22595",
+      "main",
+      "all_series",
+      null,
+      "table",
+      "Every Polymarket series (the scan backing the `series` table)",
+      null,
+      {
+        "vgi.category": "reference",
+        "vgi.doc_llm": "Every recurring question series on Polymarket, as a function. Prefer the `series` table, which scans this. A series is a question that opens a new event each occurrence \u2014 'NFL' opens one per game \u2014 so this is the level to start from for anything periodic. Take a `slug` and pass it to `events()` as `series_slug`. Note that most one-off markets belong to no series at all, so this is a view of the recurring part of the site rather than of all of it.",
+        "vgi.doc_md": "Polymarket's recurring question series \u2014 about 2,400 rows, streamed a page at a time.\n\n### Prefer the table\n\nThe `series` catalog table is backed by this function and reads as plain SQL. This function returns exactly the same rows; the `all_` prefix exists only so that the function and the table can coexist in one schema.\n\n### What a series is, and is not\n\nA series groups events that recur: `nfl` opens an event per game, and each of those events carries a market per outcome. Plenty of Polymarket's biggest markets are one-offs that belong to no series, so this does **not** enumerate the site \u2014 `tags` is the axis that covers everything.\n\n### Cost\n\nEach series inlines every event beneath it, and those events inline their markets: 50 series come to 1.73 MB with the events and 31.6 KB without. This scan asks Gamma to exclude them, which is the difference between ~83 MB and ~1.5 MB for the whole catalog.",
+        "vgi.example_queries": "[{\"description\": \"Active recurring series by recent volume, read from the scan function\", \"sql\": \"SELECT slug, title, recurrence, volume_24hr FROM polymarket.main.all_series() WHERE active AND NOT closed ORDER BY volume_24hr DESC NULLS LAST LIMIT 20\"}]",
+        "vgi.result_columns_schema": "[{\"name\": \"series_id\", \"type\": \"VARCHAR\", \"description\": \"Gamma's numeric id for the series, as a string.\"}, {\"name\": \"slug\", \"type\": \"VARCHAR\", \"description\": \"URL slug; the value events() accepts as its series_slug filter.\"}, {\"name\": \"ticker\", \"type\": \"VARCHAR\", \"description\": \"Short label Polymarket uses for the series, e.g. 'nfl'.\"}, {\"name\": \"title\", \"type\": \"VARCHAR\", \"description\": \"Human-readable name of the series, e.g. 'NFL'.\"}, {\"name\": \"description\", \"type\": \"VARCHAR\", \"description\": \"What the series covers.\"}, {\"name\": \"series_type\", \"type\": \"VARCHAR\", \"description\": \"How the series is structured, e.g. 'single'.\"}, {\"name\": \"recurrence\", \"type\": \"VARCHAR\", \"description\": \"How often a new event opens, e.g. 'daily' or 'weekly'.\"}, {\"name\": \"active\", \"type\": \"BOOLEAN\", \"description\": \"Whether the series is live on the site.\"}, {\"name\": \"closed\", \"type\": \"BOOLEAN\", \"description\": \"Whether the series has ended.\"}, {\"name\": \"archived\", \"type\": \"BOOLEAN\", \"description\": \"Whether Polymarket has archived the series.\"}, {\"name\": \"featured\", \"type\": \"BOOLEAN\", \"description\": \"Whether Polymarket is featuring the series.\"}, {\"name\": \"volume_24hr\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Traded volume across the series over the last 24 hours, in USDC.\"}, {\"name\": \"comment_count\", \"type\": \"INTEGER\", \"description\": \"Count of comments left across the series' event pages.\"}, {\"name\": \"start_date\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the series began.\"}, {\"name\": \"created_at\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the series was created in Gamma.\"}, {\"name\": \"updated_at\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When Gamma last modified this series' record.\"}]"
+      },
+      null,
+      [],
+      [],
+      null,
+      null,
+      null,
+      true,
+      null,
+      22600,
+      [
+        "SELECT slug, title, recurrence, volume_24hr FROM polymarket.main.all_series() WHERE active AND NOT closed ORDER BY volume_24hr DESC NULLS LAST LIMIT 20"
+      ],
+      null,
+      [
+        "reference"
+      ]
+    ],
+    [
+      "polymarket",
+      "22595",
+      "main",
+      "activity",
+      null,
+      "table",
+      "One wallet's history of trades, redemptions, yield and rebates",
+      null,
+      {
+        "vgi.category": "positions",
+        "vgi.doc_llm": "Everything one wallet has done, newest first \u2014 the history counterpart to `positions()`, which reports only what it holds now. Takes a wallet address, the same key `positions()` takes. Reach for it to reconstruct how a trader built a position, or when they got out. Note the feed is broader than a trade tape: on a long-lived wallet most entries are `YIELD` accruals, so filter on `activity_type = 'TRADE'` when you want executions.",
+        "vgi.doc_md": "One row per event in a wallet's history.\n\n### Wider than a trade tape\n\n`activity_type` distinguishes `TRADE` from `REDEEM` (cashing out a resolved market), `YIELD` (interest accrued on collateral), `MAKER_REBATE` and `TAKER_REBATE`, and the `SPLIT`/`MERGE` operations that convert between a dollar and a full set of outcome shares. Only `TRADE` rows carry a price and a side; the rest leave those NULL rather than reporting a misleading zero. Across a sample of active wallets, trades were roughly 92% of all entries.\n\n### Completing the chain\n\n`holders()` goes market to wallet, `positions()` goes wallet to its current markets, and this goes wallet to everything it has ever done. All three are public because Polymarket settles on a public chain.\n\n### Volume\n\nAn active wallet has a very long history, so `max_rows` is required and capped at 5,000 entries per call.",
+        "vgi.example_queries": "[{\"description\": \"How the biggest holder in a busy market built their position\", \"sql\": \"SELECT a.ts, a.activity_type, a.side, a.price, a.size FROM (SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC LIMIT 1) w, LATERAL polymarket.main.activity(w.proxy_wallet, 500, '') a ORDER BY a.ts DESC\"}, {\"description\": \"What kinds of activity a large wallet actually generates\", \"sql\": \"SELECT a.activity_type, count(*) AS entries FROM (SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC LIMIT 1) w, LATERAL polymarket.main.activity(w.proxy_wallet, 500, '') a GROUP BY a.activity_type ORDER BY entries DESC\"}]",
+        "vgi.result_columns_schema": "[{\"name\": \"proxy_wallet\", \"type\": \"VARCHAR\", \"description\": \"Address of the wallet this activity belongs to.\"}, {\"name\": \"ts\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When it happened; the column to order and poll on.\"}, {\"name\": \"activity_type\", \"type\": \"VARCHAR\", \"description\": \"What happened: TRADE, REDEEM, YIELD, MERGE, SPLIT, CONVERSION, or one of the MAKER_REBATE / TAKER_REBATE / REWARD / REFERRAL_REWARD incentive payments. Only TRADE rows carry a price and a side; the rest leave them NULL.\"}, {\"name\": \"condition_id\", \"type\": \"VARCHAR\", \"description\": \"Market involved; NULL for activity not tied to one.\"}, {\"name\": \"token_id\", \"type\": \"VARCHAR\", \"description\": \"Outcome token involved; NULL for activity not tied to one.\"}, {\"name\": \"outcome\", \"type\": \"VARCHAR\", \"description\": \"Name of that outcome, when there is one.\"}, {\"name\": \"outcome_index\", \"type\": \"INTEGER\", \"description\": \"Position of that outcome in the market's outcome list.\"}, {\"name\": \"side\", \"type\": \"VARCHAR\", \"description\": \"Direction for a TRADE: 'BUY' or 'SELL'; NULL otherwise.\"}, {\"name\": \"price\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Price per share, 0 to 1, for a TRADE; NULL otherwise.\"}, {\"name\": \"size\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Shares involved.\"}, {\"name\": \"usdc_size\", \"type\": \"DECIMAL(28,6)\", \"description\": \"USDC value of the activity.\"}, {\"name\": \"transaction_hash\", \"type\": \"VARCHAR\", \"description\": \"On-chain transaction that recorded it.\"}, {\"name\": \"title\", \"type\": \"VARCHAR\", \"description\": \"Question the market asks, when the activity names one.\"}, {\"name\": \"event_slug\", \"type\": \"VARCHAR\", \"description\": \"Slug of the event the market belongs to.\"}, {\"name\": \"trader_name\", \"type\": \"VARCHAR\", \"description\": \"Display name the wallet has set, when it has one.\"}, {\"name\": \"pseudonym\", \"type\": \"VARCHAR\", \"description\": \"Polymarket's generated pseudonym for the wallet.\"}]"
+      },
+      null,
+      [
+        "proxy_wallet",
+        "max_rows",
+        "activity_type"
+      ],
+      [
+        "VARCHAR",
+        "BIGINT",
+        "VARCHAR"
+      ],
+      null,
+      null,
+      null,
+      true,
+      null,
+      22599,
+      [
+        "SELECT a.activity_type, count(*) AS entries FROM (SELECT h.proxy_wallet FROM (SELECT condition_id FROM polymarket.main.markets(closed => 'false', order_by => 'volume24hr', ascending => 'false') LIMIT 1) m, LATERAL polymarket.main.holders(m.condition_id, 20) h ORDER BY h.amount DESC LIMIT 1) w, LATERAL polymarket.main.activity(w.proxy_wallet, 500, '') a GROUP BY a.activity_type ORDER BY entries DESC"
+      ],
+      null,
+      [
+        "market-data",
+        "blended"
+      ]
+    ],
+    [
+      "polymarket",
+      "22595",
+      "main",
+      "search",
+      null,
+      "table",
+      "Find events by searching their text, the way the site's search box does",
+      null,
+      {
+        "vgi.category": "reference",
+        "vgi.doc_llm": "Full-text search over events \u2014 the way in when you know the subject but not the tag or the slug. Reach for this FIRST for any question phrased in words ('markets about the Fed', 'anything on Bitcoin'), because no other object here searches text: filtering `markets()` on a title predicate downloads the whole catalog to do it. Returns the same columns `events()` does, so chain it into `event_markets()` to reach the tradeable questions.",
+        "vgi.doc_md": "Gamma's search endpoint, returning events with the same columns `events()` gives.\n\n### Why this exists\n\nIt is the only text search in the catalog. Gamma's other filters match ids, slugs and tags \u2014 never free text \u2014 so a `WHERE title ILIKE '%bitcoin%'` on `events()` cannot be pushed down and pages the entire catalog over the network to filter locally. This asks the search index instead.\n\n### Where to go next\n\nTake an `event_id` and pass it to `event_markets()` for the markets beneath, then unnest their outcomes to reach prices and books.\n\n### Paging\n\nResults stream a page at a time and are ranked by relevance, so a `LIMIT` takes the best matches rather than an arbitrary slice.",
+        "vgi.example_queries": "[{\"description\": \"Find the events matching a subject, best matches first\", \"sql\": \"SELECT event_id, title, volume_24hr FROM polymarket.main.search('bitcoin') LIMIT 10\"}, {\"description\": \"Search for a subject, then the tradeable markets under the best match\", \"sql\": \"SELECT m.question, m.outcomes FROM (SELECT event_id FROM polymarket.main.search('federal reserve') LIMIT 1) e, LATERAL polymarket.main.event_markets(e.event_id) m\"}]",
+        "vgi.result_columns_schema": "[{\"name\": \"event_id\", \"type\": \"VARCHAR\", \"description\": \"Gamma's numeric id for the event, as a string; the key event() takes.\"}, {\"name\": \"slug\", \"type\": \"VARCHAR\", \"description\": \"URL slug on polymarket.com; also a filter argument on markets().\"}, {\"name\": \"ticker\", \"type\": \"VARCHAR\", \"description\": \"Short label Polymarket uses for the event.\"}, {\"name\": \"title\", \"type\": \"VARCHAR\", \"description\": \"Question or headline the event asks.\"}, {\"name\": \"description\", \"type\": \"VARCHAR\", \"description\": \"Longer description of what the event covers.\"}, {\"name\": \"active\", \"type\": \"BOOLEAN\", \"description\": \"Whether the event is live on the site.\"}, {\"name\": \"closed\", \"type\": \"BOOLEAN\", \"description\": \"Whether every market under the event has stopped trading.\"}, {\"name\": \"archived\", \"type\": \"BOOLEAN\", \"description\": \"Whether Polymarket has archived the event out of its listings.\"}, {\"name\": \"featured\", \"type\": \"BOOLEAN\", \"description\": \"Whether Polymarket is featuring the event on its front page.\"}, {\"name\": \"neg_risk\", \"type\": \"BOOLEAN\", \"description\": \"Whether the markets under this event are mutually exclusive.\"}, {\"name\": \"market_count\", \"type\": \"INTEGER\", \"description\": \"How many markets sit under this event.\"}, {\"name\": \"start_date\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the event opened.\"}, {\"name\": \"end_date\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the event is scheduled to resolve.\"}, {\"name\": \"creation_date\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When the event was created.\"}, {\"name\": \"updated_at\", \"type\": \"TIMESTAMP WITH TIME ZONE\", \"description\": \"When Gamma last modified this event's record.\"}, {\"name\": \"volume\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Lifetime traded volume across every market under the event, in USDC.\"}, {\"name\": \"volume_24hr\", \"type\": \"DECIMAL(28,6)\", \"description\": \"Traded volume across the event over the last 24 hours.\"}, {\"name\": \"liquidity\", \"type\": \"DECIMAL(28,6)\", \"description\": \"USDC resting in the books of every market under the event.\"}, {\"name\": \"open_interest\", \"type\": \"DECIMAL(28,6)\", \"description\": \"USDC value of positions currently outstanding under the event.\"}, {\"name\": \"comment_count\", \"type\": \"INTEGER\", \"description\": \"Count of comments left on the event page.\"}, {\"name\": \"competitive\", \"type\": \"DECIMAL(18,6)\", \"description\": \"Polymarket's own 0-to-1 score for how contested the event is.\"}, {\"name\": \"tags\", \"type\": \"STRUCT(\\\"tag_id\\\" VARCHAR, \\\"label\\\" VARCHAR, \\\"slug\\\" VARCHAR)[]\", \"description\": \"Topic tags on the event, each a {tag_id, label, slug} struct. Kept nested \\u2014 flattening would fan every event out into one row per tag.\"}]"
+      },
+      null,
+      [
+        "query",
+        "events_status"
+      ],
+      [
+        "VARCHAR",
+        "VARCHAR"
+      ],
+      null,
+      null,
+      null,
+      true,
+      null,
+      22613,
+      [
+        "SELECT event_id, title, volume_24hr FROM polymarket.main.search('bitcoin') LIMIT 10"
+      ],
+      null,
+      [
+        "market-data"
+      ]
+    ]
+  ]
+}

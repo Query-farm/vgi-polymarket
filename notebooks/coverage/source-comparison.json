@@ -1,0 +1,8 @@
+{
+  "repository": "Query-farm/vgi-polymarket",
+  "release_tag": "v0.1.0",
+  "released_revision": "4b7daf67140d31db972e16188407d8bd37367902",
+  "current_revision": "4b7daf67140d31db972e16188407d8bd37367902",
+  "release_to_current_source_dependency_diff": "",
+  "interpretation": "The annotated v0.1.0 tag dereferences to the captured public-main commit 4b7daf67140d31db972e16188407d8bd37367902. Source, dependencies and the complete runtime API are identical. Receipts retain the literal v0.1.0 launch label; current-interface credit is reconciled separately, not mislabeled as execution of a current-SHA command."
+}
