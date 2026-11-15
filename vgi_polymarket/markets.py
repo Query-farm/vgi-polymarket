@@ -108,10 +108,14 @@ def emit_fanout(
 def _flag(value: str) -> str | None:
     """Turn a three-state string argument into Gamma's ``true``/``false``/absent.
 
-    Gamma's boolean filters are strings, and *omitting* one is meaningfully
-    different from passing either value: ``closed`` absent returns open and
-    settled markets together. A tri-state string argument is the only way to
-    offer that third option, since an Arrow boolean argument has no "unset".
+    Gamma's boolean filters are strings, and *omitting* one is not always the
+    same as passing either value, so the empty string sends nothing and leaves
+    Gamma's own default in force. That default differs by endpoint (verified
+    against the live API): ``/events/keyset`` with ``closed`` absent returns
+    running and finished events together, while ``/markets/keyset`` applies
+    ``closed=false`` itself, so ``markets()`` without ``closed`` returns open
+    markets only, even under a ``slug`` or ``condition_ids`` filter. An Arrow
+    boolean argument has no "unset", hence the tri-state string.
     """
     return value.strip().lower() or None
 
@@ -191,7 +195,10 @@ class MarketsArgs:
         str,
         Arg(
             "closed",
-            doc="Restrict to markets that have stopped trading, or to those still open",
+            doc=(
+                "'true' for markets that have stopped trading, 'false' for open ones; "
+                "omitted, Gamma returns open markets only"
+            ),
             default="",
             choices=["", "true", "false"],
         ),
@@ -255,7 +262,9 @@ MARKETS_DOCS = docs(
         "busy right now. The `outcomes` column is the important one: it carries each outcome's "
         "`token_id`, which is what `orderbook()`, `quote()` and `price_history()` key on. The "
         "`condition_id` column is a DIFFERENT key, and is what `trades()` and `holders()` take. "
-        "Passing one where the other belongs usually returns an empty result rather than an error."
+        "Passing one where the other belongs usually returns an empty result rather than an error. "
+        "Without `closed`, only OPEN markets come back, even for a `slug` or `condition_id` "
+        "lookup: pass `closed => 'true'` to see resolved ones, or use `market()`, which checks both."
     ),
     md=(
         "Markets are the tradeable questions on Polymarket. Each has two or more outcomes, and "
@@ -268,6 +277,13 @@ MARKETS_DOCS = docs(
         "`orderbook()`, `quote()` and `price_history()` take it.\n\n"
         "Both are called `market` in Polymarket's own URLs, which is where the confusion comes "
         "from.\n\n"
+        "### Open markets unless asked otherwise\n\n"
+        "Gamma's market catalog treats a missing `closed` as `closed => 'false'`. A call without "
+        "it returns open markets only, and that includes a `slug` or `condition_id` lookup (or "
+        "a `WHERE` on either column): a resolved market comes back only with `closed => 'true'`. "
+        "There is no single call for both; `UNION ALL` the two, or use `market()`, which finds a "
+        "condition id whether or not its market has closed. `events()` differs: without "
+        "`closed` it returns running and finished events together.\n\n"
         "### Reading `outcomes`\n\n"
         "Polymarket sends outcome names, prices and token ids as three separate JSON-encoded "
         "strings whose only relationship is positional. They are zipped here into one list of "
@@ -512,7 +528,10 @@ class EventsArgs:
         str,
         Arg(
             "closed",
-            doc="Restrict to events that have finished, or to those still running",
+            doc=(
+                "'true' for events that have finished, 'false' for those still running; "
+                "omitted, both are returned"
+            ),
             default="",
             choices=["", "true", "false"],
         ),

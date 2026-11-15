@@ -17,6 +17,14 @@
 
 ### Documentation
 
+- `markets()` and `events()` documented `closed` as if omitting it always
+  returned open and settled rows together. Checked against the live API, that
+  holds only for `events()`: `/markets/keyset` treats a missing `closed` as
+  `false`, so `markets()` without it returns open markets only, including a
+  `slug` or `condition_id` lookup for a resolved market. The argument docs,
+  the `markets()` agent and catalog docs, and the README now say so, and point
+  at `closed => 'true'` or `market()` for resolved markets.
+
 - The catalog docs link to the upstream service and its API documentation
   (VGI183): polymarket.com, the Polymarket API reference, the Gamma and CLOB
   OpenAPI specs, the Data API v2 docs and the market-data overview, and state

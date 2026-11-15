@@ -141,6 +141,47 @@ class TestKeysetCursor:
         )
 
 
+class TestClosedDefault:
+    """What a missing `closed` means differs by endpoint; the docs depend on it."""
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def a_resolved_market(cls, client) -> dict:
+        rows, _ = api.keyset_page(
+            api.MARKETS_PATH, "markets", [("closed", "true")], client=client, page_limit=1
+        )
+        assert rows and rows[0]["closed"]
+        return rows[0]
+
+    def test_markets_without_closed_returns_open_markets_only(self, client) -> None:
+        rows, _ = api.keyset_page(api.MARKETS_PATH, "markets", [], client=client, page_limit=100)
+        assert rows
+        assert not any(r.get("closed") for r in rows), (
+            "markets/keyset now returns closed markets without `closed`; update the markets() docs"
+        )
+
+    def test_a_resolved_market_needs_closed_true_even_by_slug(self, client, a_resolved_market: dict) -> None:
+        slug = a_resolved_market["slug"]
+        bare, _ = api.keyset_page(api.MARKETS_PATH, "markets", [("slug", slug)], client=client)
+        found, _ = api.keyset_page(
+            api.MARKETS_PATH, "markets", [("slug", slug), ("closed", "true")], client=client
+        )
+        assert not bare
+        assert [r["slug"] for r in found] == [slug]
+
+    def test_events_without_closed_returns_both(self, client) -> None:
+        first, _ = api.keyset_page(api.EVENTS_PATH, "events", [], client=client, page_limit=50)
+        busy, _ = api.keyset_page(
+            api.EVENTS_PATH,
+            "events",
+            [("order", "volume24hr"), ("ascending", "false")],
+            client=client,
+            page_limit=50,
+        )
+        states = {bool(r.get("closed")) for r in first + busy}
+        assert states == {True, False}, "events/keyset no longer mixes running and finished events"
+
+
 class TestSilentlyIgnoredFilters:
     """Gamma answers an unrecognised query parameter by ignoring it."""
 

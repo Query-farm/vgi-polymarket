@@ -174,6 +174,13 @@ because a scan blocked inside its first batch cannot be cancelled, the query
 | `positions(proxy_wallet, max_rows)` | `max_rows` 0 for all |
 | `activity(proxy_wallet, max_rows, activity_type)` | `max_rows` 1–5,000; `activity_type` `''` for every kind |
 
+`markets()` without `closed` returns **open markets only**: Gamma's market
+catalog treats a missing `closed` as `'false'`, even for a `slug` or
+`condition_id` lookup, so a resolved market appears only with
+`closed => 'true'` (or through `market(condition_id)`, which checks both).
+`events()` is different: without `closed` it returns running and finished
+events together.
+
 ### Every argument is one you can actually pass
 
 The two catalog scans take named arguments, which bind normally. **Every other
