@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3 (2026-11-16)
+
+- Python 3.14 is now the floor (CI, Docker image, tooling).
+- Offline SQL tests (`test/sql/*.test`) against a mock of the Gamma, CLOB and
+  Data APIs (recorded and synthetic responses), run through DuckDB over stdio,
+  launch and HTTP by `ci/run-integration.sh` (`make test-sql-all`), and in CI.
+
 ## 0.1.2 (2026-11-16)
 
 - Bump vgi-python to 0.52.2.

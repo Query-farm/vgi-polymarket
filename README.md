@@ -43,7 +43,7 @@ uvx haybarn-cli
 the engine launches it:
 
 ```sql
-ATTACH 'polymarket' (TYPE vgi, LOCATION 'uvx --from git+https://github.com/Query-farm/vgi-polymarket@v0.1.2 vgi-polymarket');
+ATTACH 'polymarket' (TYPE vgi, LOCATION 'uvx --from git+https://github.com/Query-farm/vgi-polymarket@v0.1.3 vgi-polymarket');
 SELECT count(*) FROM polymarket.tags;
 ```
 
