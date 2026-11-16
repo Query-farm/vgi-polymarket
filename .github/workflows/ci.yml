@@ -41,6 +41,40 @@ jobs:
       - name: Tests
         run: uv run --no-sources pytest -q
 
+  integration:
+    name: SQL tests (${{ matrix.os }}, ${{ matrix.transport }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        transport: [stdio, launch, http]
+    defaults:
+      run:
+        shell: bash
+    env:
+      HAYBARN_VERSION: "2.0.0rc11"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+          enable-cache: true
+      - name: Build the worker
+        run: uv sync --locked --no-sources --all-extras
+      - name: Install the SQL test runner
+        run: |
+          uv venv .tools
+          uv pip install -p .tools "haybarn-unittest==${HAYBARN_VERSION}"
+      # Offline: ci/run-integration.sh starts test/mock_api/server.py and points
+      # the worker's POLYMARKET_*_URL overrides at it.
+      - name: Run test/sql over ${{ matrix.transport }}
+        run: |
+          export WORKER="$PWD/.venv/bin/vgi-polymarket"
+          export HAYBARN_UNITTEST="$PWD/.tools/bin/haybarn-unittest"
+          TRANSPORT=${{ matrix.transport }} PYTHON="uv run --no-project python" ci/run-integration.sh
+
   live:
     name: live API tests
     runs-on: ubuntu-latest

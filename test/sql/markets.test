@@ -1,0 +1,240 @@
+# name: test/sql/markets.test
+# description: The market and event catalog: markets, market, events, event, event_markets, search
+# group: [polymarket]
+#
+# Offline: ci/run-integration.sh starts test/mock_api/server.py and points the
+# worker's POLYMARKET_{GAMMA,CLOB,DATA}_URL at it. The Counter-Strike market and
+# its two books are recorded Polymarket responses (notebooks/fixtures/); the
+# rest of the mock's data is synthetic.
+
+require vgi
+
+require-env VGI_POLYMARKET_WORKER
+
+require-env VGI_POLYMARKET_MOCK_API
+
+statement ok
+ATTACH 'polymarket' (TYPE vgi, LOCATION '{VGI_POLYMARKET_WORKER}');
+
+# ------------------------------------------------------------------ markets
+# Without `closed`, Gamma returns open markets only. The mock pages two rows
+# at a time, so every scan below follows at least one keyset cursor.
+
+query TTTTT
+SELECT condition_id, market_id, slug, event_id, event_slug FROM polymarket.main.markets() ORDER BY market_id;
+----
+0x6cd1330980f778692947d0ef31f533b0375046b335c8845ca265c8c42d8db753	7011741	cs2-ts7-mouz-2026-11-14	1378488	cs2-ts7-mouz-2026-11-14
+0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa	9000001	will-it-rain-in-testville	2000001	testville-weather
+
+# The recorded market, column by column: prices and volumes are DECIMAL.
+query TTTTTTTTT
+SELECT question, best_bid, best_ask, spread, last_trade_price, volume, liquidity, order_min_size, order_price_min_tick_size
+FROM polymarket.main.markets(condition_id => '0x6cd1330980f778692947d0ef31f533b0375046b335c8845ca265c8c42d8db753');
+----
+Counter-Strike: Spirit vs MOUZ (BO3) - BLAST Rivals Playoffs	0.910000	0.920000	0.010000	0.920000	1288364.079725	231603.895900	5.000000	0.010000
+
+query TTTTII
+SELECT active, closed, archived, accepting_orders, epoch(start_date)::BIGINT, epoch(end_date)::BIGINT
+FROM polymarket.main.markets(slug => 'cs2-ts7-mouz-2026-11-14');
+----
+true	false	false	true	1794565530	1794664800
+
+# `outcomes` zips three positional JSON strings into one list of structs.
+query ITTT
+SELECT o.outcome_index, o.outcome, o.token_id, o.price
+FROM polymarket.main.markets(slug => 'cs2-ts7-mouz-2026-11-14') m,
+     LATERAL (SELECT unnest(m.outcomes, recursive := true)) o
+ORDER BY o.outcome_index;
+----
+0	Spirit	111680827873875446130715877279434973292760534154578428684750586584871589809774	0.915000
+1	MOUZ	35243610203114140475638716555852668946467974164967105956078357552772356445150	0.085000
+
+query T
+SELECT slug FROM polymarket.main.markets(closed => 'true');
+----
+testville-mayor-2025
+
+query T
+SELECT slug FROM polymarket.main.markets(tag_id => '21');
+----
+will-it-rain-in-testville
+
+query T
+SELECT slug FROM polymarket.main.markets(tag_id => '2', closed => 'true', active => 'true');
+----
+testville-mayor-2025
+
+# Filter pushdown must filter: a slug that matches nothing returns nothing.
+query I
+SELECT count(*) FROM polymarket.main.markets() WHERE slug = 'NO-SUCH-SLUG';
+----
+0
+
+query T
+SELECT market_id FROM polymarket.main.markets() WHERE slug = 'will-it-rain-in-testville';
+----
+9000001
+
+query T
+SELECT market_id FROM polymarket.main.markets() WHERE condition_id = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+----
+9000001
+
+# ------------------------------------------------------------------- market
+# The per-row lookup finds open and resolved markets alike; an unknown id is
+# no row, not an error.
+
+query TTT
+SELECT t.k, m.slug, m.closed
+FROM (VALUES (1, '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'),
+             (2, '0x6cd1330980f778692947d0ef31f533b0375046b335c8845ca265c8c42d8db753'),
+             (3, '0x' || repeat('c', 64)),
+             (4, NULL)) t(k, c),
+     LATERAL polymarket.main.market(t.c) m
+ORDER BY t.k;
+----
+1	testville-mayor-2025	true
+2	cs2-ts7-mouz-2026-11-14	false
+
+query TT
+SELECT market_id, question FROM polymarket.main.market('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+----
+9000001	Will it rain in Testville on 2026-12-01?
+
+# ------------------------------------------------------------------- events
+# Without `closed`, events returns running and finished events together.
+
+query TTTTTII
+SELECT event_id, slug, title, closed, featured, market_count, comment_count
+FROM polymarket.main.events() ORDER BY event_id;
+----
+1378488	cs2-ts7-mouz-2026-11-14	Counter-Strike: Spirit vs MOUZ (BO3) - BLAST Rivals Playoffs	false	false	1	0
+2000001	testville-weather	Testville weather	false	true	1	3
+2000002	testville-election-2025	Testville mayoral election 2025	true	false	1	41
+
+query TTTT
+SELECT e.event_id, t.tag_id, t.label, t.slug
+FROM polymarket.main.events() e, LATERAL (SELECT unnest(e.tags, recursive := true)) t
+ORDER BY e.event_id;
+----
+1378488	100639	Esports	esports
+2000001	21	Weather	weather
+2000002	2	Politics	politics
+
+query T
+SELECT event_id FROM polymarket.main.events(closed => 'false') ORDER BY event_id;
+----
+1378488
+2000001
+
+query T
+SELECT event_id FROM polymarket.main.events(series_slug => 'testville-daily');
+----
+2000001
+
+query T
+SELECT event_id FROM polymarket.main.events(featured => 'true');
+----
+2000001
+
+query T
+SELECT event_id FROM polymarket.main.events(tag_id => '2');
+----
+2000002
+
+query T
+SELECT event_id FROM polymarket.main.events(slug => 'cs2-ts7-mouz-2026-11-14');
+----
+1378488
+
+# The recorded event's own figures (from the market body's inlined event).
+query TTT
+SELECT volume, liquidity, open_interest FROM polymarket.main.events() WHERE event_id = '1378488';
+----
+2698956.074415	265861.911070	1573414.911028
+
+# -------------------------------------------------------------------- event
+
+query TTI
+SELECT event_id, title, market_count FROM polymarket.main.event('2000001');
+----
+2000001	Testville weather	1
+
+query I
+SELECT count(*) FROM polymarket.main.event('424242');
+----
+0
+
+# The id is percent-encoded into the path: a traversal finds no event instead
+# of silently retargeting the request at another endpoint.
+query I
+SELECT count(*) FROM polymarket.main.event('2000001/../../markets');
+----
+0
+
+# ------------------------------------------------------------ event_markets
+
+query TTT
+SELECT e.event_id, m.slug, m.condition_id
+FROM (VALUES ('1378488'), ('2000002'), ('424242')) e(event_id),
+     LATERAL polymarket.main.event_markets(e.event_id) m
+ORDER BY e.event_id;
+----
+1378488	cs2-ts7-mouz-2026-11-14	0x6cd1330980f778692947d0ef31f533b0375046b335c8845ca265c8c42d8db753
+2000002	testville-mayor-2025	0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+
+# ------------------------------------------------------------------- search
+
+query TT
+SELECT event_id, title FROM polymarket.main.search('testville') ORDER BY event_id;
+----
+2000001	Testville weather
+2000002	Testville mayoral election 2025
+
+query T
+SELECT event_id FROM polymarket.main.search('testville', events_status => 'resolved');
+----
+2000002
+
+query T
+SELECT event_id FROM polymarket.main.search('Testville Weather', events_status => 'active');
+----
+2000001
+
+query I
+SELECT count(*) FROM polymarket.main.search('no such words');
+----
+0
+
+# --------------------------------------------------------------- arguments
+# Named arguments are constrained to their documented choices.
+
+statement error
+SELECT * FROM polymarket.main.markets(closed => 'maybe');
+----
+Argument 'closed' has an invalid value
+
+statement error
+SELECT * FROM polymarket.main.markets(order_by => 'price');
+----
+Argument 'order_by' has an invalid value
+
+statement error
+SELECT * FROM polymarket.main.events(featured => 'yes');
+----
+Argument 'featured' has an invalid value
+
+statement error
+SELECT * FROM polymarket.main.search('x', events_status => 'open');
+----
+Argument 'events_status' has an invalid value
+
+statement error
+SELECT * FROM polymarket.main.market();
+----
+<REGEX>:.*No function matches.*
+
+statement error
+SELECT * FROM polymarket.main.markets(no_such_arg => 'x');
+----
+<REGEX>:.*

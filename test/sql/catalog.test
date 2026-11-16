@@ -1,0 +1,133 @@
+# name: test/sql/catalog.test
+# description: The catalog: functions, tables, comments and the reference tables (tags, series)
+# group: [polymarket]
+#
+# Offline: ci/run-integration.sh starts test/mock_api/server.py and points the
+# worker's POLYMARKET_{GAMMA,CLOB,DATA}_URL at it. The Counter-Strike market and
+# its two books are recorded Polymarket responses (notebooks/fixtures/); the
+# rest of the mock's data is synthetic.
+
+require vgi
+
+require-env VGI_POLYMARKET_WORKER
+
+require-env VGI_POLYMARKET_MOCK_API
+
+statement ok
+ATTACH 'polymarket' (TYPE vgi, LOCATION '{VGI_POLYMARKET_WORKER}');
+
+# ------------------------------------------------------------------ listing
+
+query T
+SELECT function_name FROM duckdb_functions() WHERE database_name = 'polymarket' ORDER BY ALL;
+----
+activity
+all_series
+all_tags
+event
+event_markets
+events
+fill_price
+holders
+market
+markets
+orderbook
+positions
+price_history
+quote
+search
+trades
+
+query T
+SELECT DISTINCT function_type FROM duckdb_functions() WHERE database_name = 'polymarket';
+----
+table
+
+query TT
+SELECT schema_name, table_name FROM duckdb_tables() WHERE database_name = 'polymarket' ORDER BY ALL;
+----
+main	series
+main	tags
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'polymarket' AND comment IS NOT NULL AND comment <> '';
+----
+2
+
+query T
+SELECT comment FROM duckdb_tables() WHERE database_name = 'polymarket' AND table_name = 'tags';
+----
+Every topic on Polymarket; the tag_id everything else filters on
+
+# Every function documents itself.
+query I
+SELECT count(*) FROM duckdb_functions()
+WHERE database_name = 'polymarket' AND (description IS NULL OR description = '');
+----
+0
+
+# The primary keys the catalog declares are visible to the planner.
+query TT
+SELECT table_name, constraint_type FROM duckdb_constraints()
+WHERE database_name = 'polymarket' AND constraint_type = 'PRIMARY KEY' ORDER BY ALL;
+----
+series	PRIMARY KEY
+tags	PRIMARY KEY
+
+# --------------------------------------------------------------------- tags
+# 150 tags: the scan crosses Gamma's 100-row offset page.
+
+query IIT
+SELECT count(*), count(DISTINCT tag_id), max(label) FROM polymarket.main.tags;
+----
+150	150	Weather
+
+query TTT
+SELECT tag_id, label, slug FROM polymarket.main.tags WHERE tag_id IN ('2', '21', '100639') ORDER BY tag_id;
+----
+100639	Esports	esports
+2	Politics	politics
+21	Weather	weather
+
+query TT
+SELECT label, epoch(created_at)::BIGINT FROM polymarket.main.tags WHERE slug = 'topic-147';
+----
+Topic 147	1704067200
+
+# The table and its function form agree.
+query I
+SELECT count(*) FROM polymarket.main.all_tags();
+----
+150
+
+# ------------------------------------------------------------------- series
+# 60 series: the scan crosses /series' 50-row offset page.
+
+query II
+SELECT count(*), count(DISTINCT series_id) FROM polymarket.main.series;
+----
+60	60
+
+query TI
+SELECT recurrence, count(*) FROM polymarket.main.series GROUP BY recurrence ORDER BY recurrence;
+----
+daily	20
+monthly	20
+weekly	20
+
+query TTTTI
+SELECT series_id, slug, title, series_type, comment_count FROM polymarket.main.series WHERE featured;
+----
+5000	series-00	Series 00	single	0
+
+query I
+SELECT count(*) FROM polymarket.main.all_series();
+----
+60
+
+# --------------------------------------------------------------- arguments
+
+statement error
+SELECT * FROM polymarket.main.all_tags('x');
+----
+<REGEX>:.*

@@ -1,0 +1,153 @@
+# name: test/sql/data.test
+# description: The Data API v2 feeds: trades, holders, positions, activity
+# group: [polymarket]
+#
+# Offline: ci/run-integration.sh starts test/mock_api/server.py and points the
+# worker's POLYMARKET_{GAMMA,CLOB,DATA}_URL at it. The Counter-Strike market and
+# its two books are recorded Polymarket responses (notebooks/fixtures/); the
+# rest of the mock's data is synthetic.
+
+require vgi
+
+require-env VGI_POLYMARKET_WORKER
+
+require-env VGI_POLYMARKET_MOCK_API
+
+statement ok
+ATTACH 'polymarket' (TYPE vgi, LOCATION '{VGI_POLYMARKET_WORKER}');
+
+# The mock serves two rows per cursor page, so each multi-row answer below
+# follows the v2 cursor.
+
+# ------------------------------------------------------------------- trades
+
+query TTITTTITTT
+SELECT transaction_hash, outcome, outcome_index, side, price, size, epoch(ts)::BIGINT, proxy_wallet, trader_name, event_slug
+FROM polymarket.main.trades('0x6cd1330980f778692947d0ef31f533b0375046b335c8845ca265c8c42d8db753', 100, '')
+ORDER BY ts DESC;
+----
+0xt0	Spirit	0	BUY	0.910000	10.000000	1794648000	0x1111111111111111111111111111111111111111	alice	cs2-ts7-mouz-2026-11-14
+0xt1	MOUZ	1	BUY	0.090000	20.000000	1794647940	0x2222222222222222222222222222222222222222	(empty)	cs2-ts7-mouz-2026-11-14
+0xt2	Spirit	0	SELL	0.900000	30.000000	1794647880	0x1111111111111111111111111111111111111111	alice	cs2-ts7-mouz-2026-11-14
+0xt3	MOUZ	1	BUY	0.910000	40.000000	1794647820	0x2222222222222222222222222222222222222222	(empty)	cs2-ts7-mouz-2026-11-14
+0xt4	Spirit	0	BUY	0.090000	50.000000	1794647760	0x1111111111111111111111111111111111111111	alice	cs2-ts7-mouz-2026-11-14
+
+# max_rows stops the walk part-way through a page.
+query I
+SELECT count(*) FROM polymarket.main.trades('0x6cd1330980f778692947d0ef31f533b0375046b335c8845ca265c8c42d8db753', 3, '');
+----
+3
+
+query T
+SELECT transaction_hash FROM polymarket.main.trades('0x6cd1330980f778692947d0ef31f533b0375046b335c8845ca265c8c42d8db753', 100, 'SELL');
+----
+0xt2
+
+# A market with no trades is empty, not an error.
+query I
+SELECT count(*) FROM polymarket.main.trades('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 100, '');
+----
+0
+
+# A token id where a condition id belongs is the API's 400, surfaced.
+statement error
+SELECT * FROM polymarket.main.trades('111680827873875446130715877279434973292760534154578428684750586584871589809774', 10, '');
+----
+invalid condition id
+
+# ------------------------------------------------------------------ holders
+# Flattened from per-token groups; the group's token id is stamped on each row.
+
+query TITTTTTT
+SELECT token_id = '111680827873875446130715877279434973292760534154578428684750586584871589809774',
+       outcome_index, proxy_wallet, amount, holder_name, pseudonym, bio, verified
+FROM polymarket.main.holders('0x6cd1330980f778692947d0ef31f533b0375046b335c8845ca265c8c42d8db753', 10)
+ORDER BY amount DESC;
+----
+true	0	0x1111111111111111111111111111111111111111	5000.500000	alice	NULL	NULL	true
+true	0	0x2222222222222222222222222222222222222222	1200.000000	(empty)	Bob-Two	NULL	NULL
+false	1	0x2222222222222222222222222222222222222222	300.000000	NULL	NULL	hedger	NULL
+
+# max_rows counts holders per outcome token.
+query I
+SELECT count(*) FROM polymarket.main.holders('0x6cd1330980f778692947d0ef31f533b0375046b335c8845ca265c8c42d8db753', 1);
+----
+2
+
+# ---------------------------------------------------------------- positions
+# percent_pnl stays a percentage; Gamma's 1970-01-01 "no end date" becomes NULL;
+# outcome_index 999 ("no outcome") becomes NULL.
+
+query TTITTTTTTTTT
+SELECT condition_id, outcome, outcome_index, size, avg_price, cur_price, initial_value, current_value, cash_pnl,
+       percent_pnl, redeemable, epoch(end_date)::BIGINT
+FROM polymarket.main.positions('0x1111111111111111111111111111111111111111', 0)
+ORDER BY condition_id;
+----
+0x6cd1330980f778692947d0ef31f533b0375046b335c8845ca265c8c42d8db753	Spirit	0	5000.500000	0.800000	0.915000	4000.400000	4575.457500	575.057500	14.375000	false	1794614400
+0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa	Yes	0	100.000000	0.500000	0.620000	50.000000	62.000000	12.000000	24.000000	false	NULL
+0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb	Yes	NULL	10.000000	0.400000	1.000000	4.000000	10.000000	6.000000	150.000000	true	1762300800
+
+query I
+SELECT count(*) FROM polymarket.main.positions('0x1111111111111111111111111111111111111111', 2);
+----
+2
+
+query I
+SELECT count(*) FROM polymarket.main.positions('0x3333333333333333333333333333333333333333', 0);
+----
+0
+
+# ----------------------------------------------------------------- activity
+# Non-trade rows carry "" for market fields; those become NULL, and only a
+# TRADE has a price.
+
+query ITTITTTTT
+SELECT epoch(ts)::BIGINT, activity_type, condition_id, outcome_index, side, price, size, usdc_size, title
+FROM polymarket.main.activity('0x1111111111111111111111111111111111111111', 100, '')
+ORDER BY ts DESC;
+----
+1794648000	TRADE	0x6cd1330980f778692947d0ef31f533b0375046b335c8845ca265c8c42d8db753	0	BUY	0.910000	10.000000	9.100000	Counter-Strike: Spirit vs MOUZ (BO3) - BLAST Rivals Playoffs
+1794640000	YIELD	NULL	NULL	NULL	NULL	0.000000	0.420000	NULL
+1794630000	REDEEM	0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb	0	NULL	NULL	10.000000	10.000000	Will Testville elect a new mayor in 2025?
+1794620000	TRADE	0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa	0	BUY	0.500000	100.000000	50.000000	Will it rain in Testville on 2026-12-01?
+
+query T
+SELECT transaction_hash FROM polymarket.main.activity('0x1111111111111111111111111111111111111111', 100, 'TRADE') ORDER BY ts DESC;
+----
+0xa1
+0xa4
+
+query I
+SELECT count(*) FROM polymarket.main.activity('0x1111111111111111111111111111111111111111', 3, '');
+----
+3
+
+# ------------------------------------------------------------ chained keys
+# market -> holders -> positions: the identifiers line up across the feeds.
+
+query TT
+SELECT h.proxy_wallet, p.outcome
+FROM polymarket.main.holders('0x6cd1330980f778692947d0ef31f533b0375046b335c8845ca265c8c42d8db753', 10) h,
+     LATERAL polymarket.main.positions(h.proxy_wallet, 0) p
+WHERE p.condition_id = '0x6cd1330980f778692947d0ef31f533b0375046b335c8845ca265c8c42d8db753';
+----
+0x1111111111111111111111111111111111111111	Spirit
+
+# --------------------------------------------------------------- arguments
+
+statement error
+SELECT * FROM polymarket.main.trades('0x6cd1330980f778692947d0ef31f533b0375046b335c8845ca265c8c42d8db753');
+----
+<REGEX>:.*No function matches.*
+
+statement error
+SELECT * FROM polymarket.main.positions('0x1111111111111111111111111111111111111111');
+----
+<REGEX>:.*No function matches.*
+
+# Polymarket rejects more than 1000 holders per token with a 400; it surfaces.
+statement error
+SELECT * FROM polymarket.main.holders('0x6cd1330980f778692947d0ef31f533b0375046b335c8845ca265c8c42d8db753', 1001);
+----
+limit must be <= 1000

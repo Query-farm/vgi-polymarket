@@ -1,0 +1,140 @@
+# name: test/sql/trading.test
+# description: The CLOB: orderbook, quote, fill_price, price_history (recorded books)
+# group: [polymarket]
+#
+# Offline: ci/run-integration.sh starts test/mock_api/server.py and points the
+# worker's POLYMARKET_{GAMMA,CLOB,DATA}_URL at it. The Counter-Strike market and
+# its two books are recorded Polymarket responses (notebooks/fixtures/); the
+# rest of the mock's data is synthetic.
+
+require vgi
+
+require-env VGI_POLYMARKET_WORKER
+
+require-env VGI_POLYMARKET_MOCK_API
+
+statement ok
+ATTACH 'polymarket' (TYPE vgi, LOCATION '{VGI_POLYMARKET_WORKER}');
+
+# Token ids from the recorded market's outcomes:
+#   Spirit 111680827873875446130715877279434973292760534154578428684750586584871589809774
+#   MOUZ   35243610203114140475638716555852668946467974164967105956078357552772356445150
+
+# ---------------------------------------------------------------- orderbook
+# One row per price level; the recorded Spirit book has 91 bids and 8 asks.
+
+query TIIIIIT
+SELECT side, count(*), max(price), min(price), sum(size), any_value(condition_id), epoch_ms(any_value(book_timestamp))
+FROM polymarket.main.orderbook('111680827873875446130715877279434973292760534154578428684750586584871589809774')
+GROUP BY side ORDER BY side;
+----
+ask	8	0.990000	0.920000	138840.700000	0x6cd1330980f778692947d0ef31f533b0375046b335c8845ca265c8c42d8db753	1794648438228
+bid	91	0.910000	0.010000	482301.870000	0x6cd1330980f778692947d0ef31f533b0375046b335c8845ca265c8c42d8db753	1794648438228
+
+# Both books in one batched request, under a LATERAL; an unknown token has no
+# book and contributes no rows.
+query TII
+SELECT t.name, count(*) FILTER (WHERE b.side = 'bid'), count(*) FILTER (WHERE b.side = 'ask')
+FROM (VALUES ('Spirit', '111680827873875446130715877279434973292760534154578428684750586584871589809774'),
+             ('MOUZ', '35243610203114140475638716555852668946467974164967105956078357552772356445150'),
+             ('none', '999')) t(name, token),
+     LATERAL polymarket.main.orderbook(t.token) b
+GROUP BY t.name ORDER BY t.name;
+----
+MOUZ	8	91
+Spirit	91	8
+
+query TT
+SELECT price, size FROM polymarket.main.orderbook('35243610203114140475638716555852668946467974164967105956078357552772356445150')
+WHERE side = 'bid' ORDER BY price DESC LIMIT 2;
+----
+0.080000	2535.460000
+0.070000	7493.580000
+
+# -------------------------------------------------------------------- quote
+# BUY is the best bid and SELL the best ask; the spread is computed.
+
+query TTTTTTT
+SELECT best_bid, best_ask, midpoint, spread, last_trade_price, min_order_size, tick_size
+FROM polymarket.main.quote('111680827873875446130715877279434973292760534154578428684750586584871589809774');
+----
+0.910000	0.920000	0.915000	0.010000	0.910000	5.000000	0.010000
+
+query TTTT
+SELECT t.name, q.best_bid, q.best_ask, q.best_bid < q.best_ask
+FROM (VALUES ('Spirit', '111680827873875446130715877279434973292760534154578428684750586584871589809774'),
+             ('MOUZ', '35243610203114140475638716555852668946467974164967105956078357552772356445150')) t(name, token),
+     LATERAL polymarket.main.quote(t.token) q
+ORDER BY t.name;
+----
+MOUZ	0.080000	0.090000	true
+Spirit	0.910000	0.920000	true
+
+# A token with no book still gets its row, with nothing quoted.
+query TTT
+SELECT token_id, best_bid, midpoint FROM polymarket.main.quote('999');
+----
+999	NULL	NULL
+
+# --------------------------------------------------------------- fill_price
+# Walking the recorded asks: 2535.46 at 0.92, the remaining 2464.54 at 0.93.
+
+query TTTTTTTIT
+SELECT requested_size, filled_size, fully_filled, avg_price, worst_price, touch_price, slippage, levels_consumed, notional
+FROM polymarket.main.fill_price('111680827873875446130715877279434973292760534154578428684750586584871589809774', 'buy', 5000);
+----
+5000.000000	5000.000000	true	0.924929	0.930000	0.920000	0.004929	2	4624.645400
+
+query TTTTI
+SELECT side, filled_size, avg_price, slippage, levels_consumed
+FROM polymarket.main.fill_price('111680827873875446130715877279434973292760534154578428684750586584871589809774', 'sell', 100);
+----
+sell	100.000000	0.910000	0.000000	1
+
+# More than the whole ask side (138,840.70 shares) cannot fill.
+query TTT
+SELECT fully_filled, filled_size, worst_price
+FROM polymarket.main.fill_price('111680827873875446130715877279434973292760534154578428684750586584871589809774', 'buy', 200000);
+----
+false	138840.700000	0.990000
+
+# No book: nothing fills.
+query TTI
+SELECT fully_filled, avg_price, levels_consumed FROM polymarket.main.fill_price('999', 'buy', 10);
+----
+false	NULL	0
+
+# ------------------------------------------------------------ price_history
+# The origin repeats its latest sample; the duplicate is collapsed.
+
+query IT
+SELECT epoch(ts)::BIGINT, price
+FROM polymarket.main.price_history('111680827873875446130715877279434973292760534154578428684750586584871589809774', '1w', 60)
+ORDER BY ts;
+----
+1794600000	0.550000
+1794603600	0.610000
+1794607200	0.740000
+1794610800	0.915000
+
+query I
+SELECT count(*) FROM polymarket.main.price_history('1001', '1d', 60);
+----
+0
+
+# --------------------------------------------------------------- arguments
+
+statement error
+SELECT * FROM polymarket.main.orderbook();
+----
+<REGEX>:.*No function matches.*
+
+statement error
+SELECT * FROM polymarket.main.price_history('1001', '1w');
+----
+<REGEX>:.*No function matches.*
+
+statement error
+SELECT * FROM polymarket.main.fill_price('1001', 'buy');
+----
+<REGEX>:.*No function matches.*

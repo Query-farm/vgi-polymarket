@@ -19,3 +19,6 @@ venv/
 .vgi-lint-baseline*.json
 .vgi-review-cache.json
 .vgi-sim-cache.json
+
+# SQL test runner (make tools)
+.tools/
