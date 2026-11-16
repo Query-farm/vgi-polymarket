@@ -6,9 +6,12 @@
 # anything — a waiver that suppresses nothing is a standing claim nobody
 # revisits, and it hides the moment the rule starts applying.
 
-location = "uv run --project . polymarket_worker.py"
+# The installed console script (`uv sync --no-dev`), as CI lints it. The
+# `polymarket_worker.py` entry needs sibling vgi-python/vgi-rpc checkouts.
+location = ".venv/bin/vgi-polymarket"
 select = ["ALL"]
-fail_on = "error"
+# Publication bar: zero findings, info included.
+fail_on = "info"
 
 ignore = [
   { code = "VGI311", kind = "tooling-bug", reason = """\

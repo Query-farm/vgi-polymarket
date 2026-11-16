@@ -58,3 +58,26 @@ jobs:
         run: uv sync --no-sources --group dev
       - name: Live tests
         run: uv run --no-sources pytest -q -m live --ignore=tests/test_end_to_end.py
+
+  metadata:
+    name: Metadata quality (vgi-lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+      # Published vgi-python/vgi-rpc, not the sibling checkouts in [tool.uv.sources].
+      - run: uv sync --locked --no-dev --no-sources
+      - name: Read fail_on from vgi-lint.toml
+        id: lintcfg
+        run: python3 -c 'import tomllib; print("fail_on=" + tomllib.load(open("vgi-lint.toml", "rb")).get("fail_on", "error"))' >> "$GITHUB_OUTPUT"
+      - uses: Query-farm/vgi-lint-check@v2
+        with:
+          location: ${{ github.workspace }}/.venv/bin/vgi-polymarket
+          # Set in vgi-lint.toml, so local runs and CI agree.
+          fail-on: ${{ steps.lintcfg.outputs.fail_on }}
+          # Examples read Polymarket's live public API, which rate-limits shared
+          # runner IPs (HTTP 429). The static gate is the real gate here; the
+          # live job above checks behaviour against the real API.
+          execute: "false"
