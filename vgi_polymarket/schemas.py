@@ -89,7 +89,7 @@ def to_decimal(value: Any) -> Decimal | None:
         # str() of a float is its shortest round-tripping repr, which is the
         # decimal the sender wrote. str() of a str is a no-op.
         parsed = Decimal(str(value))
-    except (InvalidOperation, ValueError):
+    except InvalidOperation, ValueError:
         return None
     return parsed if parsed.is_finite() else None
 
@@ -186,11 +186,11 @@ def to_timestamp(value: Any) -> datetime | None:
     if isinstance(value, (int, float)):
         try:
             return datetime.fromtimestamp(float(value), tz=UTC)
-        except (ValueError, OverflowError, OSError):
+        except ValueError, OverflowError, OSError:
             return None
     try:
         parsed = datetime.fromisoformat(str(value))
-    except (ValueError, OverflowError):
+    except ValueError, OverflowError:
         return None
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
@@ -209,7 +209,7 @@ def to_json_list(value: Any) -> list[Any]:
         return []
     try:
         decoded = json.loads(value)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return []
     return decoded if isinstance(decoded, list) else []
 
@@ -774,7 +774,7 @@ def flatten_book(token_id: str, payload: dict[str, Any]) -> list[dict[str, Any]]
     if timestamp is not None:
         try:
             moment = int(timestamp) / 1000
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             moment = None
     rows: list[dict[str, Any]] = []
     for key, side in (("bids", "bid"), ("asks", "ask")):

@@ -12,12 +12,12 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Database",
     "Topic :: Office/Business :: Financial",
 ]
 
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = [
     # `haybarn` is not optional: vgi-python binds a pushed-down WHERE clause with
     # an in-process DuckDB engine, and without one every filtered scan fails at
@@ -68,7 +68,7 @@ path = "vgi_polymarket/__init__.py"
 
 [tool.ruff]
 line-length = 110
-target-version = "py313"
+target-version = "py314"
 
 [tool.ruff.lint.per-file-ignores]
 # VGI discovers these SDK metadata declarations as class attributes.
