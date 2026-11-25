@@ -43,7 +43,7 @@ uvx haybarn-cli
 the engine launches it:
 
 ```sql
-ATTACH 'polymarket' (TYPE vgi, LOCATION 'uvx --from git+https://github.com/Query-farm/vgi-polymarket@v0.1.3 vgi-polymarket');
+ATTACH 'polymarket' (TYPE vgi, LOCATION 'uvx --from git+https://github.com/Query-farm/vgi-polymarket@v0.2.0 vgi-polymarket');
 SELECT count(*) FROM polymarket.tags;
 ```
 
@@ -73,6 +73,8 @@ Both entry-point scripts carry PEP-723 headers that resolve `vgi-python` and
 `vgi-rpc` from sibling checkouts (`../vgi-python`, `../vgi-rpc`), matching this
 project's `[tool.uv.sources]`. Installing the package instead (`pip install .`)
 uses the published versions from `[project.dependencies]`.
+
+vgi-polymarket 0.2.0 speaks VGI protocol 3.4, so it needs Haybarn 2.0.1 or newer (Haybarn 2.0.0 loads a 3.3 `vgi` extension that cannot attach it).
 
 ## The identifiers
 
